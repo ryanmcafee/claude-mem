@@ -8,15 +8,16 @@
 
 set -euo pipefail
 
-mkdir -p "$HOME/.claude" "$HOME/.claude-mem"
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+mkdir -p "$CLAUDE_CONFIG_DIR" "$HOME/.claude-mem"
 
 if [[ -n "${CLAUDE_MEM_CREDENTIALS_FILE:-}" ]]; then
   if [[ ! -f "$CLAUDE_MEM_CREDENTIALS_FILE" ]]; then
     echo "ERROR: CLAUDE_MEM_CREDENTIALS_FILE set but file missing: $CLAUDE_MEM_CREDENTIALS_FILE" >&2
     exit 1
   fi
-  cp "$CLAUDE_MEM_CREDENTIALS_FILE" "$HOME/.claude/.credentials.json"
-  chmod 600 "$HOME/.claude/.credentials.json"
+  cp "$CLAUDE_MEM_CREDENTIALS_FILE" "$CLAUDE_CONFIG_DIR/.credentials.json"
+  chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"
 fi
 
 export PATH="/usr/local/bun/bin:/usr/local/share/npm-global/bin:$PATH"

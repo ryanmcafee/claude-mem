@@ -81,7 +81,7 @@ serves the server-beta runtime; legacy Chroma/uv tooling is outside this image's
 contract. A custom `CLAUDE_MEM_DATA_DIR` or `CLAUDE_CONFIG_DIR` requires a matching
 writable mount. Provider credentials should remain read-only Secrets; the
 entrypoint copies a supplied `CLAUDE_MEM_CREDENTIALS_FILE` into `.claude` with
-mode 0600.
+mode 0600. The entrypoint honors `CLAUDE_CONFIG_DIR`; offline fixtures verify both default and custom paths, source immutability, and missing-source failure. Each credential directory must be private to its workload.
 
 ## Runtime budget
 

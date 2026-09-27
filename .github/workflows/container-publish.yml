@@ -59,17 +59,13 @@ jobs:
       - name: Prove the gate rejects known-vulnerable input
         if: matrix.arch == 'amd64'
         run: |
-          docker pull alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
-          docker tag alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98 claude-mem:known-bad
-          docker save --output "$RUNNER_TEMP/known-bad.tar" claude-mem:known-bad
+          printf 'FROM alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98\n' | docker buildx build --file - --platform linux/amd64 --sbom=true --provenance=mode=max --output "type=oci,dest=$RUNNER_TEMP/known-bad.tar" .
           set +e
-          TRIVY_FORMAT=json TRIVY_OUTPUT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
+          TRIVY_REPORT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
           result=$?
           set -e
           test "$result" = 1
           jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length > 0' "$RUNNER_TEMP/known-bad.json"
-      - name: Block HIGH and CRITICAL findings in the release archive
-        run: bash scripts/container/scan.sh "$RUNNER_TEMP/image.tar"
       - name: Load cached runtime for smoke testing
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -84,6 +80,8 @@ jobs:
         run: python3 scripts/container/verify-archive.py "$RUNNER_TEMP/image.tar" "$(docker image inspect --format '{{.Id}}' claude-mem:check)" linux/${{ matrix.arch }}
       - name: Non-root read-only runtime smoke
         run: bash scripts/container/smoke.sh claude-mem:check
+      - name: Block HIGH and CRITICAL findings in the release archive
+        run: bash scripts/container/scan.sh "$RUNNER_TEMP/image.tar"
       - name: Hand off only the scanned archive
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

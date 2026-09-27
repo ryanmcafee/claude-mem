@@ -29,6 +29,8 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     bun /opt/claude-mem/scripts/server-service.cjs status
   '
 
+bash scripts/container/credentials-smoke.sh "$image"
+
 # Exercise actual HTTP startup and Postgres migrations under the same mounts.
 # The password is disposable test data, generated per invocation.
 name="claude-mem-smoke-$$"
