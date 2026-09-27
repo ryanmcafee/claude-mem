@@ -302,6 +302,60 @@ export class ServerClient {
     );
   }
 
+  // MCAA-260 — the remote knowledge-corpus surface. Paths and request shapes
+  // come from src/server/contracts/corpus-v1.ts (CORPUS_PATHS); this client is
+  // deliberately a thin transport so the contract stays the single definition.
+  async buildCorpus(projectId: string, request: ServerBuildCorpusRequest): Promise<unknown> {
+    return this.request('POST', corpusCollectionPath(projectId), request);
+  }
+
+  async listCorpora(
+    projectId: string,
+    input: { scope?: ServerReadScope; limit?: number } = {},
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (input.scope) params.set('scope', input.scope);
+    if (input.limit !== undefined) params.set('limit', String(input.limit));
+    const query = params.toString();
+    return this.request('GET', `${corpusCollectionPath(projectId)}${query ? `?${query}` : ''}`);
+  }
+
+  async getCorpus(
+    projectId: string,
+    ref: { name?: string; corpusId?: string },
+    options: { includeSources?: boolean } = {},
+  ): Promise<unknown> {
+    const suffix = options.includeSources ? '?include=sources' : '';
+    return this.request('GET', `${corpusItemPath(projectId, ref)}${suffix}`);
+  }
+
+  async primeCorpus(projectId: string, name: string): Promise<unknown> {
+    return this.request('POST', `${corpusItemPath(projectId, { name })}/prime`, {});
+  }
+
+  async rebuildCorpus(projectId: string, name: string): Promise<unknown> {
+    return this.request('POST', `${corpusItemPath(projectId, { name })}/rebuild`, {});
+  }
+
+  async reprimeCorpus(projectId: string, name: string): Promise<unknown> {
+    return this.request('POST', `${corpusItemPath(projectId, { name })}/reprime`, {});
+  }
+
+  async queryCorpus(
+    projectId: string,
+    ref: { name?: string; corpusId?: string },
+    input: { question: string; history?: Array<{ role: 'user' | 'assistant'; content: string }> },
+  ): Promise<unknown> {
+    return this.request('POST', `${corpusItemPath(projectId, ref)}/query`, {
+      question: input.question,
+      ...(input.history && input.history.length > 0 ? { history: input.history } : {}),
+    });
+  }
+
+  async deleteCorpus(projectId: string, name: string): Promise<unknown> {
+    return this.request('DELETE', corpusItemPath(projectId, { name }));
+  }
+
   // Phase 8 — MCP `observation_generation_status`. Server returns the same
   // payload as `/v1/jobs/:id` so MCP clients and REST clients see identical
   // job status (including transport state).
@@ -391,7 +445,7 @@ export class ServerClient {
   }
 
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     body?: unknown,
   ): Promise<T> {
@@ -453,6 +507,34 @@ export class ServerClient {
       );
     }
   }
+}
+
+/**
+ * Corpus build request as the remote server accepts it. Structural only — the
+ * authoritative schema is BuildCorpusRequestSchema in the server contract,
+ * which this client cannot import (the plugin bundle must not pull in server
+ * code), so the server validates and 400s on anything that does not match.
+ */
+export interface ServerBuildCorpusRequest {
+  name: string;
+  description?: string;
+  filter?: Record<string, unknown>;
+  shared?: boolean;
+}
+
+function corpusCollectionPath(projectId: string): string {
+  return `/v1/projects/${encodeURIComponent(projectId)}/corpora`;
+}
+
+/**
+ * A corpus is addressed by name inside your own project, or by id when it was
+ * discovered through `list_corpora` with the shared scope — a name is not a
+ * cross-tenant identity, so the id routes are a separate, read-only path.
+ */
+function corpusItemPath(projectId: string, ref: { name?: string; corpusId?: string }): string {
+  if (ref.corpusId) return `/v1/corpora/${encodeURIComponent(ref.corpusId)}`;
+  if (!ref.name) throw new ServerClientError('invalid_response', 'Provide exactly one of name or corpusId');
+  return `${corpusCollectionPath(projectId)}/${encodeURIComponent(ref.name)}`;
 }
 
 export function isServerClientError(error: unknown): error is ServerClientError {

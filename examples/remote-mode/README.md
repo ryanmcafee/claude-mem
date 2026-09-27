@@ -5,13 +5,14 @@ worker process is spawned and no local database is created. The API key is the
 tenant binding: the server derives the team from it and refuses to return
 another tenant's rows, whatever the client asks for.
 
-Three integrations are covered here, each runnable:
+Four integrations are covered here, each runnable:
 
 | Example | For | Run |
 | --- | --- | --- |
 | [`paperclip-agent.md`](./paperclip-agent.md) | A Paperclip agent, or any Claude Code / OpenClaw install | Config only |
 | [`mcp-client.ts`](./mcp-client.ts) | Any MCP client over streamable HTTP | `bun examples/remote-mode/mcp-client.ts` |
 | [`http-client.ts`](./http-client.ts) | Any language, plain HTTP | `bun examples/remote-mode/http-client.ts` |
+| [`corpus-client.ts`](./corpus-client.ts) | Building and querying a knowledge corpus | `bun examples/remote-mode/corpus-client.ts` |
 
 ## Environment contract
 
@@ -77,8 +78,60 @@ curl -sS -X POST "$CLAUDE_MEM_SERVER_URL/v1/memories" \
 | `POST /v1/search` | Full-text search. Accepts `scope`. |
 | `POST /v1/context` | Search plus a pre-joined `context` string for prompt injection. |
 | `POST /v1/events` | Record an agent event and enqueue observation generation. |
-| `POST`/`GET /v1/mcp` | Streamable-HTTP MCP endpoint exposing `search`, `context`, `recent`. |
+| `POST`/`GET /v1/mcp` | Streamable-HTTP MCP endpoint exposing `search`, `context`, `recent` and the corpus tools. |
+| `POST /v1/projects/:projectId/corpora` | Build a knowledge corpus, or rebuild one in place. Accepts `shared`. |
+| `GET /v1/projects/:projectId/corpora` | List corpora. Accepts `scope`. |
+| `GET /v1/projects/:projectId/corpora/:name` | Corpus metadata; `?include=sources` adds the member observations. |
+| `POST /v1/projects/:projectId/corpora/:name/{rebuild,prime,reprime,query}` | Refresh, materialise, invalidate, ask. |
+| `DELETE /v1/projects/:projectId/corpora/:name` | Delete a corpus. Member observations are untouched. |
+| `GET /v1/corpora/:corpusId` and `POST /v1/corpora/:corpusId/query` | Read a corpus another tenant published. Read-only. |
 | `GET /healthz` | Liveness. |
 
 Every read is scoped by the key's team server-side and written to the audit log
 with the scope that was used.
+
+## Knowledge corpora
+
+A corpus is a named, filtered set of observations you can ask questions of. The
+tool names are the same in both modes (`build_corpus`, `list_corpora`,
+`prime_corpus`, `query_corpus`, `rebuild_corpus`, `reprime_corpus`, plus
+`get_corpus` and `delete_corpus` remotely), so a skill transfers unchanged. Three
+behaviours differ from the local worker and the difference is deliberate:
+
+- **Membership is by reference.** Deleting or un-sharing an observation removes
+  it from every corpus that held it, and the corpus's `observationCount` falls.
+  A corpus is not a frozen snapshot; record observation ids yourself if you need
+  a citation that cannot move.
+- **Priming is deterministic and optional.** `prime_corpus` renders the member
+  set and caches it under a content digest; it calls no model. `query_corpus`
+  renders on demand when nothing is cached, so a read-only key never meets a
+  "not primed" error. A cached render is served only while its digest still
+  matches live membership.
+- **There is no server-side conversation.** Each `query_corpus` call is
+  independent. Pass prior turns in `history` for a follow-up. `reprime_corpus`
+  is cache invalidation, not "clear the drifted conversation" — there is none to
+  clear.
+
+`build_corpus` filter arguments also differ: the remote server takes `kinds` (an
+array), `metadataMatch` (JSON containment) and `dateStartEpoch`/`dateEndEpoch`
+(epoch ms) where the local tool takes `types`, `concepts`/`files` and ISO
+`dateStart`/`dateEnd`. Passing a local-only argument fails loudly and names the
+substitute rather than returning a plausible, wrong corpus.
+
+Publishing a corpus needs `memories:write:shared`, exactly like publishing an
+observation — and a shared corpus may contain **only** observations that are
+themselves shared. A build or rebuild that would include a private row is
+refused with `422 SharedCorpusPrivateMembers` and the disqualifying count; it is
+never silently filtered down or downgraded to private.
+
+Two ceilings apply at build and rebuild, each with a `reason` so you know which
+fix applies: more than 2000 matched rows is `422 CorpusTooLarge`
+(`reason: "members"` — narrow the filter), and a render over 400,000 estimated
+tokens is `422 CorpusTooLarge` (`reason: "tokens"` — reduce the content volume).
+Below the ceiling, `limit` truncation is legitimate and always reported through
+`matchedCount` and `truncated`.
+
+Answering a question is the one corpus operation that calls a model, so the
+server needs `CLAUDE_MEM_SERVER_PROVIDER` and the matching API key configured.
+Everything else — build, list, get, prime, reprime, delete — is pure SQL and a
+deterministic render.

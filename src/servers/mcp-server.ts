@@ -28,6 +28,7 @@ import {
   ServerClientError,
   isServerClientError,
   type ServerAddObservationRequest,
+  type ServerBuildCorpusRequest,
   type ServerContextObservationsRequest,
   type ServerReadScope,
   type ServerRecordEventRequest,
@@ -230,6 +231,76 @@ function wrapHandler<Args>(
       return formatToolError(error);
     }
   };
+}
+
+// MCAA-260 — corpus tools in remote mode.
+//
+// All six corpus tools called callWorker() unconditionally, and remote mode
+// starts no worker, so every one of them failed with a connection error. In
+// remote mode they go to the server's /v1 corpus routes instead; local mode is
+// untouched.
+type CorpusToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+
+/**
+ * Local `build_corpus` filter arguments with no remote column behind them.
+ * Translating them silently would return a plausible, wrong corpus, so the
+ * remote path fails loudly and names the substitute (ADR 0001 D5/D7).
+ */
+const LOCAL_ONLY_CORPUS_FILTER_ARGS: Record<string, string> = {
+  types: 'kinds (an array of observation kinds)',
+  concepts: 'metadataMatch (JSON containment against observation metadata)',
+  files: 'metadataMatch (JSON containment against observation metadata)',
+  dateStart: 'dateStartEpoch (epoch milliseconds)',
+  dateEnd: 'dateEndEpoch (epoch milliseconds)',
+  project: 'projectId',
+};
+
+function corpusProjectId(ctx: ServerAvailable, args: Record<string, unknown>): string {
+  const explicit = typeof args.projectId === 'string' ? args.projectId.trim() : '';
+  return explicit.length > 0 ? explicit : ctx.projectId;
+}
+
+function requireCorpusName(args: Record<string, unknown>): string {
+  const name = args.name;
+  if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
+  return name;
+}
+
+function remoteBuildCorpusRequest(args: Record<string, unknown>): ServerBuildCorpusRequest {
+  for (const [local, remote] of Object.entries(LOCAL_ONLY_CORPUS_FILTER_ARGS)) {
+    if (args[local] !== undefined) {
+      throw new Error(
+        `build_corpus argument "${local}" is not supported against a remote claude-mem server; use ${remote} instead.`,
+      );
+    }
+  }
+  const filter: Record<string, unknown> = {};
+  for (const key of ['kinds', 'query', 'platformSource', 'dateStartEpoch', 'dateEndEpoch', 'metadataMatch', 'limit', 'scope']) {
+    if (args[key] !== undefined) filter[key] = args[key];
+  }
+  return {
+    name: requireCorpusName(args),
+    ...(typeof args.description === 'string' ? { description: args.description } : {}),
+    ...(Object.keys(filter).length > 0 ? { filter } : {}),
+    ...(args.shared !== undefined ? { shared: args.shared === true } : {}),
+  };
+}
+
+/** Run a corpus tool against the remote server, or fall through to the worker. */
+async function corpusTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  remote: (ctx: ServerAvailable, args: Record<string, unknown>) => Promise<unknown>,
+  local: () => Promise<CorpusToolResult>,
+): Promise<CorpusToolResult> {
+  if (!isRemoteRuntime()) return local();
+  try {
+    const ctx = requireServerForObservationTool(toolName);
+    return formatJsonResult(await remote(ctx, args));
+  } catch (error) {
+    logger.warn('SYSTEM', `${toolName} failed against the remote server`, undefined, error instanceof Error ? error : new Error(String(error)));
+    return formatToolError(error);
+  }
 }
 
 interface ObservationAddArgs {
@@ -873,9 +944,15 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       required: ['name'],
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      return await callWorker('/api/corpus', { body: args });
-    }
+    handler: async (args: any) => corpusTool(
+      'build_corpus',
+      args,
+      (ctx, remoteArgs) => ctx.client.buildCorpus(
+        corpusProjectId(ctx, remoteArgs),
+        remoteBuildCorpusRequest(remoteArgs),
+      ),
+      () => callWorker('/api/corpus', { body: args }),
+    )
   },
   {
     name: 'list_corpora',
@@ -885,13 +962,19 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       properties: {},
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      return await callWorker('/api/corpus', { query: args });
-    }
+    handler: async (args: any) => corpusTool(
+      'list_corpora',
+      args,
+      (ctx, remoteArgs) => ctx.client.listCorpora(corpusProjectId(ctx, remoteArgs), {
+        ...(remoteArgs.scope === 'shared' ? { scope: 'shared' as const } : {}),
+        ...(typeof remoteArgs.limit === 'number' ? { limit: remoteArgs.limit } : {}),
+      }),
+      () => callWorker('/api/corpus', { query: args }),
+    )
   },
   {
     name: 'prime_corpus',
-    description: 'Prime a knowledge corpus — creates an AI session loaded with the corpus knowledge. Must be called before query_corpus.',
+    description: 'Prime a knowledge corpus — creates an AI session loaded with the corpus knowledge. Must be called before query_corpus. Against a remote claude-mem server priming is optional and deterministic: it materialises a rendering, and query_corpus renders on demand if needed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -900,15 +983,20 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       required: ['name'],
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      const { name, ...rest } = args;
-      if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
-      return await callWorker(`/api/corpus/${encodeURIComponent(name)}/prime`, { body: rest });
-    }
+    handler: async (args: any) => corpusTool(
+      'prime_corpus',
+      args,
+      (ctx, remoteArgs) => ctx.client.primeCorpus(corpusProjectId(ctx, remoteArgs), requireCorpusName(remoteArgs)),
+      () => {
+        const { name, ...rest } = args;
+        if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
+        return callWorker(`/api/corpus/${encodeURIComponent(name)}/prime`, { body: rest });
+      },
+    )
   },
   {
     name: 'query_corpus',
-    description: 'Ask a question to a primed knowledge corpus. The corpus must be primed first with prime_corpus.',
+    description: 'Ask a question to a primed knowledge corpus. The corpus must be primed first with prime_corpus. Against a remote claude-mem server each call is independent — the server keeps no conversation state, so pass prior turns in history for follow-ups.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -918,11 +1006,31 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       required: ['name', 'question'],
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      const { name, ...rest } = args;
-      if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
-      return await callWorker(`/api/corpus/${encodeURIComponent(name)}/query`, { body: rest });
-    }
+    handler: async (args: any) => corpusTool(
+      'query_corpus',
+      args,
+      (ctx, remoteArgs) => {
+        const question = typeof remoteArgs.question === 'string' ? remoteArgs.question.trim() : '';
+        if (question.length === 0) throw new Error('Missing required argument: question');
+        return ctx.client.queryCorpus(
+          corpusProjectId(ctx, remoteArgs),
+          typeof remoteArgs.corpusId === 'string' && remoteArgs.corpusId.trim() !== ''
+            ? { corpusId: remoteArgs.corpusId }
+            : { name: requireCorpusName(remoteArgs) },
+          {
+            question,
+            // The remote server holds no conversation state, so follow-up
+            // context is the client's to carry.
+            ...(Array.isArray(remoteArgs.history) ? { history: remoteArgs.history } : {}),
+          },
+        );
+      },
+      () => {
+        const { name, ...rest } = args;
+        if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
+        return callWorker(`/api/corpus/${encodeURIComponent(name)}/query`, { body: rest });
+      },
+    )
   },
   {
     name: 'rebuild_corpus',
@@ -935,15 +1043,20 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       required: ['name'],
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      const { name, ...rest } = args;
-      if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
-      return await callWorker(`/api/corpus/${encodeURIComponent(name)}/rebuild`, { body: rest });
-    }
+    handler: async (args: any) => corpusTool(
+      'rebuild_corpus',
+      args,
+      (ctx, remoteArgs) => ctx.client.rebuildCorpus(corpusProjectId(ctx, remoteArgs), requireCorpusName(remoteArgs)),
+      () => {
+        const { name, ...rest } = args;
+        if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
+        return callWorker(`/api/corpus/${encodeURIComponent(name)}/rebuild`, { body: rest });
+      },
+    )
   },
   {
     name: 'reprime_corpus',
-    description: 'Create a fresh knowledge agent session for a corpus, clearing prior Q&A context. Use when conversation has drifted or after rebuilding.',
+    description: 'Create a fresh knowledge agent session for a corpus, clearing prior Q&A context. Use when conversation has drifted or after rebuilding. Against a remote claude-mem server this is cache invalidation only — there is no conversation state to clear.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -952,11 +1065,16 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       required: ['name'],
       additionalProperties: true
     },
-    handler: async (args: any) => {
-      const { name, ...rest } = args;
-      if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
-      return await callWorker(`/api/corpus/${encodeURIComponent(name)}/reprime`, { body: rest });
-    }
+    handler: async (args: any) => corpusTool(
+      'reprime_corpus',
+      args,
+      (ctx, remoteArgs) => ctx.client.reprimeCorpus(corpusProjectId(ctx, remoteArgs), requireCorpusName(remoteArgs)),
+      () => {
+        const { name, ...rest } = args;
+        if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
+        return callWorker(`/api/corpus/${encodeURIComponent(name)}/reprime`, { body: rest });
+      },
+    )
   }
 ];
 
