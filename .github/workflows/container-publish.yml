@@ -60,7 +60,8 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           docker pull alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
-          docker save --output "$RUNNER_TEMP/known-bad.tar" alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
+          docker tag alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98 claude-mem:known-bad
+          docker save --output "$RUNNER_TEMP/known-bad.tar" claude-mem:known-bad
           set +e
           TRIVY_FORMAT=json TRIVY_OUTPUT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
           result=$?

@@ -70,7 +70,7 @@ all capabilities and disable privilege escalation. Mount these as writable
 | Mount | Why it is writable |
 | --- | --- |
 | `/data/claude-mem` | `CLAUDE_MEM_DATA_DIR`: runtime PID/port state, logs, settings and local scratch/cache. Postgres is canonical storage. |
-| `/home/node/.claude` | Claude CLI state and the optional copied credentials file. Mount source credentials separately, read-only, at `/run/secrets/...`. |
+| `/home/node/.claude` | `CLAUDE_CONFIG_DIR`: Claude CLI state (including `.claude.json`) and the optional copied credentials file. Mount source credentials separately, read-only, at `/run/secrets/...`. |
 | `/home/node/.claude-mem` | Home-relative compatibility settings/state used by bundled helpers and created by the entrypoint. |
 | `/tmp` | Runtime temporary files, Bun/Claude subprocess scratch, XDG cache (`/tmp/.cache`). |
 
@@ -94,3 +94,5 @@ Full successful build/scan/smoke timings are still pending; timeouts are bounds,
 not measurements. There is no shared
 build cache: per-job BuildKit cache only accelerates the smoke image export,
 preventing cross-branch cache poisoning and stale dependency validation.
+
+Implementation references: [BuildKit attestations](https://docs.docker.com/build/ci/github-actions/attestations/), [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/), and [Trivy image scanning](https://trivy.dev/docs/dev/references/configuration/cli/trivy_image/).

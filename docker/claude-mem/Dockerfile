@@ -30,6 +30,7 @@ RUN mkdir -p /home/node/.claude /home/node/.claude-mem /data/claude-mem \
 ENV CLAUDE_MEM_CONTAINER_MODE=server \
     CLAUDE_MEM_RUNTIME=server-beta \
     CLAUDE_MEM_DATA_DIR=/data/claude-mem \
+    CLAUDE_CONFIG_DIR=/home/node/.claude \
     XDG_CACHE_HOME=/tmp/.cache \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
     DISABLE_AUTOUPDATER=1

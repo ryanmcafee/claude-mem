@@ -21,6 +21,10 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     fi
     bun --version
     claude --version
+    # Config mutation requires no login/provider call and catches writes to
+    # ~/.claude.json outside the mounted config directory.
+    claude mcp add --scope user readonly-smoke -- echo smoke
+    test -s "$CLAUDE_CONFIG_DIR/.claude.json"
     # Execute the bundled CLI to catch missing native/runtime dependencies.
     bun /opt/claude-mem/scripts/server-service.cjs status
   '
