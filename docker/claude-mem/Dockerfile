@@ -12,7 +12,8 @@ FROM base AS dependencies
 # Build the exact npm CLI versions against musl; upstream Linux downloads use
 # glibc and require symbols (including __res_init) that gcompat cannot provide.
 # Cargo/toolchains and the SQL generator remain in this builder stage only.
-RUN apk add --no-cache npm python3 make g++ linux-headers cargo
+# clang20-dev supplies the libclang that rquickjs-sys needs to run bindgen.
+RUN apk add --no-cache npm python3 make g++ linux-headers cargo clang20-dev
 RUN for version in 0.23.2 0.24.7 0.26.9; do \
       cargo install tree-sitter-cli --version "=$version" --locked \
         --root "/opt/tree-sitter/$version" \
