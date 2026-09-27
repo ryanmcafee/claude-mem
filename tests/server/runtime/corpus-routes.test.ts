@@ -25,7 +25,13 @@ import {
 import { DisabledServerQueueManager } from '../../../src/server/runtime/types.js';
 import { logger } from '../../../src/utils/logger.js';
 import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
-import { MAX_CORPUS_MEMBERS } from '../../../src/server/contracts/corpus-v1.js';
+import {
+  CorpusDetailSchema,
+  ListCorporaResponseSchema,
+  MAX_CORPUS_MEMBERS,
+  PrimeCorpusResponseSchema,
+  QueryCorpusResponseSchema,
+} from '../../../src/server/contracts/corpus-v1.js';
 import type { CorpusAnswerer, CorpusAnswerRequest } from '../../../src/server/services/CorpusAnswerer.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
@@ -227,6 +233,9 @@ describe('MCAA-260 — remote corpus routes', () => {
       description: 'operational knowledge',
     });
     expect(built.status).toBe(201);
+    // The contract schemas are strict, so this fails on an extra, missing or
+    // retyped field — the implementation cannot drift from corpus-v1.ts.
+    expect(CorpusDetailSchema.safeParse(built.json.corpus).success).toBe(true);
     expect(built.json.corpus.stats.observationCount).toBe(2);
     expect(built.json.corpus.stats.matchedCount).toBe(2);
     expect(built.json.corpus.stats.truncated).toBe(false);
@@ -237,6 +246,7 @@ describe('MCAA-260 — remote corpus routes', () => {
       question: 'what happens before a kernel upgrade?',
     });
     expect(answered.status).toBe(200);
+    expect(QueryCorpusResponseSchema.safeParse(answered.json).success).toBe(true);
     expect(answered.json.name).toBe('ops-runbook');
     expect(answered.json.session_id).toBeNull();
     expect(answerCalls).toHaveLength(1);
@@ -252,6 +262,7 @@ describe('MCAA-260 — remote corpus routes', () => {
     expect(second.json.corpus.id).toBe(first.json.corpus.id);
 
     const listed = await request<ListResponse>('GET', corporaPath(projectAId), keyA);
+    expect(ListCorporaResponseSchema.safeParse(listed.json).success).toBe(true);
     expect(listed.json.corpora.map(corpus => corpus.name)).toEqual(['notes']);
   });
 
@@ -426,6 +437,7 @@ describe('MCAA-260 — remote corpus routes', () => {
       'POST', corporaPath(projectAId, '/facts/prime'), keyA, {},
     );
     expect(primed.status).toBe(200);
+    expect(PrimeCorpusResponseSchema.safeParse(primed.json).success).toBe(true);
     const digestBefore = primed.json.contentDigest;
 
     // Priming is deterministic, so priming again is a no-op.

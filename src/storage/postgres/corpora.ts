@@ -8,7 +8,7 @@
 // content digest still matches live membership.
 
 import type { CorpusFilter, CorpusScope } from '../../server/contracts/corpus-v1.js';
-import { CORPUS_MEMBER_ORDER } from '../../server/contracts/corpus-v1.js';
+import { CORPUS_MEMBER_ORDER, CorpusFilterSchema } from '../../server/contracts/corpus-v1.js';
 import type { JsonObject, PostgresQueryable } from './utils.js';
 import { newId, queryOne, toEpoch, toJsonObject } from './utils.js';
 
@@ -494,6 +494,24 @@ export class PostgresCorpusRepository {
   }
 }
 
+/**
+ * A stored filter only ever got there through the contract schema, so failing
+ * to parse means the stored shape and the contract have diverged. Refuse the
+ * corpus rather than falling back to an empty filter — on a rebuild an empty
+ * filter matches everything, which is the opposite of what the operator asked
+ * for.
+ */
+function parseStoredFilter(raw: unknown, name: string): CorpusFilter {
+  const parsed = CorpusFilterSchema.safeParse(toJsonObject(raw));
+  if (!parsed.success) {
+    throw new Error(
+      `Corpus "${name}" has a stored filter this server cannot read: `
+      + parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+    );
+  }
+  return parsed.data;
+}
+
 function mapCorpusRow(row: CorpusRow): PostgresCorpus {
   return {
     id: row.id,
@@ -501,7 +519,7 @@ function mapCorpusRow(row: CorpusRow): PostgresCorpus {
     teamId: row.team_id,
     name: row.name,
     description: row.description,
-    filter: toJsonObject(row.filter) as CorpusFilter,
+    filter: parseStoredFilter(row.filter, row.name),
     filterDigest: row.filter_digest,
     memberScope: row.member_scope === 'shared' ? 'shared' : 'project',
     shared: row.shared === true,
