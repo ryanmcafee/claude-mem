@@ -99,10 +99,16 @@ function isTruthyFlag(raw: string): boolean {
 }
 
 /**
- * Remote mode is requested when a server URL is configured, or when the
- * runtime is explicitly set to `remote`. Presence of the URL is enough: a
- * container that has been handed a server address must never quietly write to
+ * Remote mode is requested by `CLAUDE_MEM_RUNTIME=remote` from either source,
+ * or by a server URL in the process environment. An environment URL is enough
+ * on its own: a container handed a server address must never quietly write to
  * a local database instead.
+ *
+ * A server URL in settings.json is deliberately NOT enough. The pre-existing
+ * `CLAUDE_MEM_RUNTIME=server` runtime stores its address under that same
+ * settings key, and it is specified to fall back to the local worker when
+ * under-configured. Treating that file as a remote-mode trigger would turn
+ * every installed server-runtime settings.json into a no-fallback hard error.
  */
 export function isRemoteModeRequested(sources: RemoteModeSources = {}): boolean {
   const env = sources.env ?? process.env;
@@ -112,10 +118,7 @@ export function isRemoteModeRequested(sources: RemoteModeSources = {}): boolean 
     settings.CLAUDE_MEM_RUNTIME,
   ).toLowerCase();
   if (runtime === REMOTE_RUNTIME_VALUE) return true;
-  return firstNonEmpty(
-    env[REMOTE_MODE_ENV_KEYS.serverUrl],
-    settings.CLAUDE_MEM_SERVER_URL,
-  ).length > 0;
+  return firstNonEmpty(env[REMOTE_MODE_ENV_KEYS.serverUrl]).length > 0;
 }
 
 /**

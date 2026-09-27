@@ -36,8 +36,22 @@ describe('isRemoteModeRequested', () => {
     expect(isRemoteModeRequested({ env: { CLAUDE_MEM_SERVER_URL: 'https://x.test' }, settings: {} })).toBe(true);
   });
 
-  it('is true when the server url comes from settings.json', () => {
-    expect(isRemoteModeRequested({ env: {}, settings: { CLAUDE_MEM_SERVER_URL: 'https://x.test' } })).toBe(true);
+  it('is false for a settings.json server url alone, which the legacy server runtime also uses', () => {
+    expect(isRemoteModeRequested({ env: {}, settings: { CLAUDE_MEM_SERVER_URL: 'https://x.test' } })).toBe(false);
+  });
+
+  it('is true when settings.json opts in explicitly alongside its server url', () => {
+    expect(isRemoteModeRequested({
+      env: {},
+      settings: { CLAUDE_MEM_RUNTIME: 'remote', CLAUDE_MEM_SERVER_URL: 'https://x.test' },
+    })).toBe(true);
+  });
+
+  it('leaves an under-configured legacy server install on its fallback path', () => {
+    expect(isRemoteModeRequested({
+      env: {},
+      settings: { CLAUDE_MEM_RUNTIME: 'server', CLAUDE_MEM_SERVER_URL: 'http://localhost:1234' },
+    })).toBe(false);
   });
 
   it('is true for CLAUDE_MEM_RUNTIME=remote even before the url is set', () => {
