@@ -9,6 +9,8 @@ RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cd
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV USE_BUILTIN_RIPGREP=0
 FROM base AS dependencies
+# gcompat is inherited from base: both the SQL build CLI and locked runtime
+# CLI request glibc loaders. Compiler/toolchain packages stay in this stage.
 RUN apk add --no-cache npm python3 make g++ linux-headers
 WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
