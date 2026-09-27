@@ -147,6 +147,16 @@ jobs:
           docker buildx imagetools inspect --raw "$subject" > "$RUNNER_TEMP/index.json"
           jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64","arm64"]' "$RUNNER_TEMP/index.json"
           jq -e '[.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length == 2' "$RUNNER_TEMP/index.json"
+          # Check remote attestation predicates and platform bindings too.
+          # Their content/subjects were verified in the immutable input archive;
+          # preserve-digests makes these the same documents after upload.
+          for arch in amd64 arm64; do
+            runtime=$(jq -r --arg arch "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest' "$RUNNER_TEMP/index.json")
+            attestation=$(jq -r --arg runtime "$runtime" '.manifests[] | select(.annotations["vnd.docker.reference.digest"] == $runtime) | .digest' "$RUNNER_TEMP/index.json")
+            [[ "$attestation" == sha256:* ]]
+            skopeo inspect --raw --authfile "$authfile" "docker://$image@$attestation" > "$RUNNER_TEMP/attestation.json"
+            jq -e '[.layers[].annotations["in-toto.io/predicate-type"]] | any(. == "https://spdx.dev/Document") and any(startswith("https://slsa.dev/provenance/"))' "$RUNNER_TEMP/attestation.json"
+          done
           cosign sign --yes "$subject"
           cosign verify --certificate-identity "https://github.com/$WORKFLOW_REF" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$subject"

@@ -40,6 +40,7 @@ with tarfile.open(archive) as tar:
     descriptor, manifest = runtime[0]
     if manifest['config']['digest'] != expected_config:
         raise ValueError('Smoke-tested image differs from scanned OCI runtime config')
+    blob(manifest['config'])  # Validate the referenced configuration digest too.
     predicates = set()
     for att_descriptor, att_manifest in entries:
         annotations = att_descriptor.get('annotations', {})
@@ -47,6 +48,10 @@ with tarfile.open(archive) as tar:
             continue
         for layer in att_manifest['layers']:
             statement = blob(layer)
+            subjects = statement.get('subject', [])
+            digest = descriptor['digest'].split(':')[1]
+            if not any(s.get('digest', {}).get('sha256') == digest for s in subjects):
+                raise ValueError('Attestation subject does not bind the runtime manifest')
             predicates.add(statement.get('predicateType', ''))
     if 'https://spdx.dev/Document' not in predicates:
         raise ValueError('Missing SPDX SBOM attestation for runtime image')
