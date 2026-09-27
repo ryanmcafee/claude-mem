@@ -197,7 +197,7 @@ export class CorpusService {
         });
       }
 
-      const stats = {
+      const stats: CorpusSummary['stats'] = {
         ...summarizeMembers(members),
         matchedCount: counts.matchedCount,
         truncated: counts.matchedCount > limit,
@@ -473,11 +473,11 @@ export class CorpusService {
     members?: readonly PostgresCorpusMember[];
     primedAtEpoch: number | null;
     contentDigest: string | null;
-    statsOverride?: Record<string, unknown>;
+    statsOverride?: CorpusSummary['stats'];
   }): CorpusSummary {
-    const storedStats = corpus.stats as Record<string, unknown>;
+    const storedStats: Record<string, unknown> = corpus.stats;
     const live = context.members ? summarizeMembers(context.members) : null;
-    const stats = context.statsOverride ?? {
+    const stats: CorpusSummary['stats'] = context.statsOverride ?? {
       // observationCount comes from live membership where we have it, because a
       // deleted or un-shared observation must make the count fall (ADR D2).
       observationCount: live?.observationCount ?? numberOr(storedStats.observationCount, 0),
@@ -496,7 +496,7 @@ export class CorpusService {
       shared: corpus.shared,
       memberScope: corpus.memberScope,
       foreign: corpus.teamId !== context.teamId,
-      stats: stats as CorpusSummary['stats'],
+      stats,
       filterDigest: corpus.filterDigest,
       contentDigest: context.contentDigest,
       session_id: null,
@@ -512,7 +512,7 @@ export class CorpusService {
     members?: readonly PostgresCorpusMember[];
     primedAtEpoch: number | null;
     contentDigest: string | null;
-    statsOverride?: Record<string, unknown>;
+    statsOverride?: CorpusSummary['stats'];
     sources?: Array<Record<string, unknown>>;
   }): CorpusDetailView {
     return {
