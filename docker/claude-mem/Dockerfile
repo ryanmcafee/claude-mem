@@ -14,7 +14,8 @@ WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
 RUN bun install --frozen-lockfile --production
 # Rebuild native bindings against musl rather than copying glibc prebuilds.
-RUN npm rebuild --build-from-source
+# Node 24 headers require C++20; older grammar gyp files default to C++17.
+RUN CXXFLAGS="-std=c++20" npm rebuild --build-from-source
 ARG CLAUDE_CODE_VERSION=2.1.283
 RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
