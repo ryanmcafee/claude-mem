@@ -11,7 +11,7 @@ ENTRYPOINT = Path(os.environ.get('TEST_ENTRYPOINT', Path(__file__).resolve().par
 
 class CredentialTest(unittest.TestCase):
     def test_copy(self):
-        for case in ('default', 'custom', 'permissive', 'symlink', 'directory-symlink', 'copy-failure', 'missing'):
+        for case in ('default', 'custom', 'permissive', 'symlink', 'directory-symlink', 'copy-failure', 'rename-failure', 'directory', 'missing'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 config = root / ('custom' if case == 'custom' else '.claude')
@@ -23,7 +23,7 @@ class CredentialTest(unittest.TestCase):
                 destination = config / '.credentials.json'
                 target = root / 'target'
                 target.write_text('untouched')
-                if case in ('permissive', 'copy-failure'):
+                if case in ('permissive', 'copy-failure', 'rename-failure'):
                     destination.write_text('old')
                     destination.chmod(0o644)
                 if case == 'symlink':
@@ -32,6 +32,8 @@ class CredentialTest(unittest.TestCase):
                     target.unlink()
                     target.mkdir()
                     destination.symlink_to(target, target_is_directory=True)
+                if case == 'directory':
+                    destination.mkdir()
                 binaries = root / 'bin'
                 binaries.mkdir()
                 # stdout is the already-open destination, before cat writes bytes.
@@ -48,6 +50,10 @@ if os.environ['COPY_CASE'] == 'copy-failure':
 os.execv('/bin/cat', ['cat'] + sys.argv[1:])
 ''')
                 probe.chmod(0o755)
+                if case == 'rename-failure':
+                    rename = binaries / 'mv'
+                    rename.write_text('#!/bin/sh\nexit 24\n')
+                    rename.chmod(0o755)
                 env = dict(os.environ, HOME=str(root), CLAUDE_CONFIG_DIR=str(config),
                            CLAUDE_MEM_CONTAINER_MODE='shell',
                            CLAUDE_MEM_CREDENTIALS_FILE=str(root / 'missing' if case == 'missing' else source),
@@ -64,9 +70,13 @@ os.execv('/bin/cat', ['cat'] + sys.argv[1:])
                 if case == 'missing':
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('file missing', result.stderr)
-                elif case == 'copy-failure':
+                elif case in ('copy-failure', 'rename-failure'):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(destination.read_text(), 'old')
+                elif case == 'directory':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertTrue(destination.is_dir())
+                    self.assertEqual(list(destination.iterdir()), [])
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue((root / 'probe').exists(), 'First-write permission probe was bypassed')

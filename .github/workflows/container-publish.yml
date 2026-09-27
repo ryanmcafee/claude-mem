@@ -84,7 +84,20 @@ jobs:
       - name: Non-root read-only runtime smoke
         run: bash scripts/container/smoke.sh claude-mem:check
       - name: Block HIGH and CRITICAL findings in the release archive
-        run: bash scripts/container/scan.sh "$RUNNER_TEMP/image.tar"
+        run: |
+          trivy --version > "$RUNNER_TEMP/scanner-metadata.txt"
+          CONTAINER_SCAN_REPORT="$RUNNER_TEMP/release-scan.json" bash scripts/container/scan.sh "$RUNNER_TEMP/image.tar"
+      - name: Preserve vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scan-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/release-scan.json
+            ${{ runner.temp }}/known-bad.json
+            ${{ runner.temp }}/scanner-metadata.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Hand off only the scanned archive
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

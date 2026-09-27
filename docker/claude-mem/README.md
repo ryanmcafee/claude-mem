@@ -98,3 +98,17 @@ preventing cross-branch cache poisoning and stale dependency validation.
 Implementation references: [BuildKit attestations](https://docs.docker.com/build/ci/github-actions/attestations/), [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/), and [Trivy image scanning](https://trivy.dev/docs/dev/references/configuration/cli/trivy_image/).
 
 The fast offline credential regression command is `python3 scripts/container/test-credentials.py`. It checks permissions before the first write, default/custom paths, permissive-file and symlink replacement, failed-copy cleanup and missing sources, using synthetic data only.
+
+### Alpine runtime verification
+
+The image uses digest-pinned Alpine 3.24.2 and Bun 1.3.12 musl on both native
+architectures. Builder and runtime share v3.24 repositories; native bindings are
+rebuilt against musl. Node comes from that supported branch. Package upgrades
+are intentionally resolved at build time and recorded in the SBOM and smoke log;
+base digests and the plugin lockfile pin the other inputs. Build tools remain
+in the dependencies stage. `USE_BUILTIN_RIPGREP=0` selects Alpine ripgrep.
+
+Run `bash scripts/container/smoke.sh IMAGE` for native parsing, CLI versions,
+credential replacement and read-only HTTP runtime checks. CI retains structured
+scan reports and scanner/database metadata as `scan-amd64` / `scan-arm64`,
+including failed vulnerability scans. HIGH/CRITICAL findings remain blocking.

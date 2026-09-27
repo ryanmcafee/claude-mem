@@ -1,25 +1,25 @@
 # syntax=docker/dockerfile:1
-# Keep the native build toolchain out of the runtime image. Update the Node
-# builder/runtime digests together and keep Bun aligned with plugin/bun.lock.
-FROM oven/bun:1.3.12@sha256:8956c7667fa17beb6e3c664115e66bdacfe502da5d99603626e74c197bdef160 AS bun
-FROM node:22-trixie@sha256:072889700aecef94c5cee46c6e60107cc2aaad9aa9e418ce05abaa1e85752ee3 AS dependencies
+# Builder and runtime use the same supported Alpine release/libc on each platform.
+FROM oven/bun:1.3.12-alpine@sha256:26d8996560ca94eab9ce48afc0c7443825553c9a851f40ae574d47d20906826d AS bun
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS base
+RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cdn.alpinelinux.org/alpine/v3.24/community > /etc/apk/repositories \
+ && apk upgrade --no-cache \
+ && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep \
+ && addgroup -g 1000 node && adduser -D -u 1000 -G node node
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+ENV USE_BUILTIN_RIPGREP=0
+FROM base AS dependencies
+RUN apk add --no-cache npm python3 make g++ linux-headers
 WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
 RUN bun install --frozen-lockfile --production
-# This executable is used by the bundled agent SDK; never resolve "latest".
+# Rebuild native bindings against musl rather than copying glibc prebuilds.
+RUN npm rebuild --build-from-source
 ARG CLAUDE_CODE_VERSION=2.1.283
 RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-FROM node:22-trixie-slim@sha256:b26b04c123d9ff8ab646ceb18b9d75a1173acf64b9a401094b906d27b29338d4 AS runtime
-# curl provides the compose healthcheck; git is a Claude runtime dependency.
-RUN apt-get update \
- && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends ca-certificates curl git \
- && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /opt/yarn* \
- && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
-COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+FROM base AS runtime
 COPY --from=dependencies /opt/claude-cli /opt/claude-cli
 RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
 COPY plugin/ /opt/claude-mem/

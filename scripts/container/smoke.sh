@@ -19,8 +19,16 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     if touch /opt/claude-mem/.immutable-probe 2>/dev/null; then
       echo "Application installation must be immutable" >&2; exit 1
     fi
-    bun --version
-    claude --version
+    test "$(bun --version)" = 1.3.12
+    node --version
+    claude --version | grep -F 2.1.283
+    git --version
+    curl --version
+    rg --version
+    apk info -v
+    cd /opt/claude-mem
+    node -e "const Parser = require(\"tree-sitter\"); const p = new Parser(); p.setLanguage(require(\"tree-sitter-javascript\")); const t = p.parse(\"const answer = 42;\"); if (t.rootNode.hasError) throw Error(t.rootNode.toString()); console.log(t.rootNode.toString());"
+    cd /home/node
     # Config mutation requires no login/provider call and catches writes to
     # ~/.claude.json outside the mounted config directory.
     claude mcp add --scope user readonly-smoke -- echo smoke
