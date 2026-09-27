@@ -68,6 +68,15 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
     return { status: response.status, json };
   }
 
+  async function del<T>(path: string, key: string): Promise<{ status: number; json: T }> {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    const json = await response.json().catch(() => ({})) as T;
+    return { status: response.status, json };
+  }
+
   beforeEach(async () => {
     loggerSpies = [
       spyOn(logger, 'info').mockImplementation(() => {}),
@@ -318,6 +327,40 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       expect(response.status).toBe(400);
       expect(response.json.error).toBe('ValidationError');
     }
+  });
+
+  it('makes a shared observation readable cross-tenant but deletable only by its owner', async () => {
+    const published = await post<{ memory: { id: string } }>('/v1/memories', keyAPublisher, {
+      projectId: projectAId,
+      content: 'shared runbook: drain the node before the kernel upgrade',
+      shared: true,
+    });
+    expect(published.status).toBe(201);
+    const sharedId = published.json.memory.id;
+
+    const searchAsB = () => post<SearchResponse>('/v1/search', keyB, {
+      projectId: projectBId,
+      query: 'kernel upgrade',
+      scope: 'shared',
+    });
+
+    const visible = await searchAsB();
+    expect(visible.json.observations.map(o => o.id)).toEqual([sharedId]);
+
+    // Reading a shared row does not confer write access. The delete filters on
+    // the key's team, and 404 rather than 403 keeps existence unrevealed.
+    const forgedDelete = await del(`/v1/memories/${sharedId}`, keyB);
+    expect(forgedDelete.status).toBe(404);
+
+    const stillVisible = await searchAsB();
+    expect(stillVisible.json.observations.map(o => o.id)).toEqual([sharedId]);
+
+    const ownerDelete = await del<{ deleted: boolean }>(`/v1/memories/${sharedId}`, keyA);
+    expect(ownerDelete.status).toBe(200);
+    expect(ownerDelete.json.deleted).toBe(true);
+
+    const gone = await searchAsB();
+    expect(gone.json.observations).toEqual([]);
   });
 
   it('treats a write with no shared flag as team-private', async () => {
