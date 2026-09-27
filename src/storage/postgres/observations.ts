@@ -26,9 +26,20 @@ export interface PostgresObservation {
   metadata: JsonObject;
   embedding: JsonValue | null;
   createdByJobId: string | null;
+  /** Published to the cross-tenant shared scope; false keeps it team-private. */
+  shared: boolean;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }
+
+/**
+ * Read scope for observation queries.
+ *
+ * - `project` (default): this team's rows in this project only.
+ * - `shared`: those rows PLUS observations any team published as shared. Opt-in
+ *   per query, so cross-tenant knowledge is possible but never accidental.
+ */
+export type ObservationReadScope = 'project' | 'shared';
 
 export interface PostgresObservationSource {
   id: string;
@@ -52,6 +63,7 @@ interface ObservationRow {
   metadata: unknown;
   embedding: unknown | null;
   created_by_job_id: string | null;
+  shared: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -81,6 +93,7 @@ export class PostgresObservationRepository {
     metadata?: JsonObject;
     embedding?: JsonValue | null;
     createdByJobId?: string | null;
+    shared?: boolean;
   }): Promise<PostgresObservation> {
     await assertProjectOwnership(this.client, input.projectId, input.teamId);
     if (input.serverSessionId) {
@@ -95,9 +108,9 @@ export class PostgresObservationRepository {
       `
         INSERT INTO observations (
           id, project_id, team_id, server_session_id, kind, content,
-          generation_key, metadata, embedding, created_by_job_id
+          generation_key, metadata, embedding, created_by_job_id, shared
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
         ON CONFLICT (team_id, project_id, generation_key) WHERE generation_key IS NOT NULL DO UPDATE SET
           updated_at = observations.updated_at
         RETURNING *
@@ -112,7 +125,8 @@ export class PostgresObservationRepository {
         input.generationKey ?? null,
         JSON.stringify(input.metadata ?? {}),
         input.embedding == null ? null : JSON.stringify(input.embedding),
-        input.createdByJobId ?? null
+        input.createdByJobId ?? null,
+        input.shared ?? false
       ]
     );
     return mapObservationRow(row!);
@@ -136,17 +150,29 @@ export class PostgresObservationRepository {
     teamId: string;
     serverSessionId?: string | null;
     limit?: number;
+    scope?: ObservationReadScope;
   }): Promise<PostgresObservation[]> {
+    // `$5` is the shared opt-in. When false the predicate collapses to the
+    // original team+project filter, so a caller that omits `scope` cannot see
+    // another tenant's rows even if those rows are flagged shared.
     const result = await this.client.query<ObservationRow>(
       `
         SELECT * FROM observations
-        WHERE project_id = $1
-          AND team_id = $2
+        WHERE (
+            (project_id = $1 AND team_id = $2)
+            OR ($5 AND shared)
+          )
           AND ($3::text IS NULL OR server_session_id = $3)
         ORDER BY created_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.serverSessionId ?? null, input.limit ?? 100]
+      [
+        input.projectId,
+        input.teamId,
+        input.serverSessionId ?? null,
+        input.limit ?? 100,
+        input.scope === 'shared',
+      ]
     );
     return result.rows.map(mapObservationRow);
   }
@@ -157,8 +183,11 @@ export class PostgresObservationRepository {
     query: string;
     limit?: number;
     platformSource?: string | null;
+    scope?: ObservationReadScope;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
+    // `$6` is the shared opt-in; see listByProject. The tenant predicate stays
+    // first so the team+project index is still usable for the default scope.
     const result = await this.client.query<ObservationRow>(
       `
         SELECT observations.* FROM observations
@@ -166,8 +195,10 @@ export class PostgresObservationRepository {
           ON server_sessions.id = observations.server_session_id
           AND server_sessions.project_id = observations.project_id
           AND server_sessions.team_id = observations.team_id
-        WHERE observations.project_id = $1
-          AND observations.team_id = $2
+        WHERE (
+            (observations.project_id = $1 AND observations.team_id = $2)
+            OR ($6 AND observations.shared)
+          )
           AND observations.content_search @@ websearch_to_tsquery('english', $3)
           AND (
             $5::text IS NULL
@@ -190,7 +221,14 @@ export class PostgresObservationRepository {
         ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource]
+      [
+        input.projectId,
+        input.teamId,
+        input.query,
+        input.limit ?? 20,
+        platformSource,
+        input.scope === 'shared',
+      ]
     );
     return result.rows.map(mapObservationRow);
   }
@@ -401,6 +439,7 @@ function mapObservationRow(row: ObservationRow): PostgresObservation {
     metadata: toJsonObject(row.metadata),
     embedding: row.embedding,
     createdByJobId: row.created_by_job_id,
+    shared: row.shared === true,
     createdAtEpoch: toEpoch(row.created_at),
     updatedAtEpoch: toEpoch(row.updated_at)
   };

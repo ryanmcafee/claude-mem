@@ -37,6 +37,15 @@ import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../..
 
 const SOURCE_ADAPTER_DEFAULT = 'api';
 
+// MCAA-237 — the extra grant a key needs before it may publish an observation
+// to the cross-tenant shared scope. Reading shared rows only needs the opt-in
+// on the query; writing them needs this scope.
+const SHARED_WRITE_SCOPE = 'memories:write:shared';
+
+// Read scope on /v1/search, /v1/context and the MCP recall tools. `project` is
+// the default so an existing client keeps seeing only its own tenant's rows.
+const ReadScopeSchema = z.enum(['project', 'shared']).optional();
+
 declare const __DEFAULT_PACKAGE_VERSION__: string;
 const MCP_SERVER_VERSION =
   typeof __DEFAULT_PACKAGE_VERSION__ !== 'undefined' ? __DEFAULT_PACKAGE_VERSION__ : '0.0.0-dev';
@@ -887,11 +896,15 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         kind: z.string().min(1).optional(),
         content: z.string().min(1),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        // Publish this observation to the cross-tenant shared scope. Requires
+        // the SHARED_WRITE_SCOPE grant; omitted means team-private.
+        shared: z.boolean().optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
         if (!teamId) return;
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
+        if (body.shared === true && !this.ensureSharedWriteAllowed(req, res)) return;
         const linkedSessionId = await this.resolveMemorySessionLink({
           serverSessionId: body.serverSessionId ?? null,
           contentSessionId: body.contentSessionId ?? null,
@@ -908,6 +921,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           kind: body.kind ?? 'manual',
           content: body.content,
           metadata: body.metadata ?? {},
+          shared: body.shared === true,
         };
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
@@ -932,12 +946,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(100).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        scope: ReadScopeSchema,
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
         if (!teamId) return;
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
+        const scope = body.scope ?? 'project';
         let results;
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
@@ -947,6 +963,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
+            scope,
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -959,6 +976,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           query: body.query,
           limit: body.limit ?? 20,
           platformSource,
+          scope,
           resultCount: results.length,
           observationIds: results.map(o => o.id),
         });
@@ -978,12 +996,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(50).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        scope: ReadScopeSchema,
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
         if (!teamId) return;
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
+        const scope = body.scope ?? 'project';
         let results;
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
@@ -993,6 +1013,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
+            scope,
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -1009,6 +1030,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           query: body.query,
           limit: body.limit ?? 10,
           platformSource,
+          scope,
           resultCount: results.length,
           observationIds: results.map(o => o.id),
         });
@@ -1037,30 +1059,30 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         }
       };
       const backend: RecallBackend = {
-        search: async ({ projectId, query, limit }) => {
+        search: async ({ projectId, query, limit, scope }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({ projectId, teamId, query, limit, scope });
           // Audit the read, same as POST /v1/search — the MCP path is no exception.
           await this.auditWrite(req, 'observation.read', null, projectId, {
-            mode: 'search', via: 'mcp', query, limit,
+            mode: 'search', via: 'mcp', query, limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
           return rows.map(serializeObservation);
         },
-        context: async ({ projectId, query, limit }) => {
+        context: async ({ projectId, query, limit, scope }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({ projectId, teamId, query, limit, scope });
           await this.auditWrite(req, 'observation.read', null, projectId, {
-            mode: 'context', via: 'mcp', query, limit,
+            mode: 'context', via: 'mcp', query, limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
           return rows.map(serializeObservation);
         },
-        recent: async ({ projectId, limit }) => {
+        recent: async ({ projectId, limit, scope }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.listByProject({ projectId, teamId, limit });
+          const rows = await repo.listByProject({ projectId, teamId, limit, scope });
           await this.auditWrite(req, 'observation.read', null, projectId, {
-            mode: 'recent', via: 'mcp', limit,
+            mode: 'recent', via: 'mcp', limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
           return rows.map(serializeObservation);
@@ -1306,6 +1328,23 @@ export class ServerV1PostgresRoutes implements RouteHandler {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Publishing to the cross-tenant shared scope needs its own grant. A key with
+   * plain `memories:write` writes into its own tenant only; without this gate an
+   * ordinary agent key could push its team's observations to every other tenant.
+   */
+  private ensureSharedWriteAllowed(req: Request, res: Response): boolean {
+    const scopes = req.authContext?.scopes ?? [];
+    if (scopes.includes(SHARED_WRITE_SCOPE) || scopes.includes('*')) {
+      return true;
+    }
+    res.status(403).json({
+      error: 'Forbidden',
+      message: `Publishing to the shared scope requires the "${SHARED_WRITE_SCOPE}" scope on this API key`,
+    });
+    return false;
   }
 
   // Shared scoped-id lookup for the /:id routes. Resolves the row's project
@@ -2016,6 +2055,7 @@ function serializeObservation(observation: {
   kind: string;
   content: string;
   metadata: Record<string, unknown>;
+  shared?: boolean;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }): Record<string, unknown> {
@@ -2027,6 +2067,7 @@ function serializeObservation(observation: {
     kind: observation.kind,
     content: observation.content,
     metadata: observation.metadata,
+    shared: observation.shared === true,
     createdAtEpoch: observation.createdAtEpoch,
     updatedAtEpoch: observation.updatedAtEpoch,
   };
