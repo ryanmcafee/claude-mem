@@ -9,7 +9,10 @@ RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cd
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV USE_BUILTIN_RIPGREP=0
 FROM base AS dependencies
-RUN apk add --no-cache npm python3 make g++ linux-headers
+# gcompat is build-only: @derekstride/tree-sitter-sql's install script runs
+# `npx --package=tree-sitter-cli@v0.24.7 -- tree-sitter generate`, and that
+# release ships no musl binary, so the glibc one fails to exec as ENOENT.
+RUN apk add --no-cache npm python3 make g++ linux-headers gcompat
 WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
 RUN bun install --frozen-lockfile --production
