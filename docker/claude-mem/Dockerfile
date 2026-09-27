@@ -4,7 +4,7 @@ FROM oven/bun:1.3.12-alpine@sha256:26d8996560ca94eab9ce48afc0c7443825553c9a851f4
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS base
 RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cdn.alpinelinux.org/alpine/v3.24/community > /etc/apk/repositories \
  && apk upgrade --no-cache \
- && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep \
+ && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep gcompat \
  && addgroup -g 1000 node && adduser -D -u 1000 -G node node
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV USE_BUILTIN_RIPGREP=0
@@ -13,6 +13,9 @@ RUN apk add --no-cache npm python3 make g++ linux-headers
 WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
 RUN bun install --frozen-lockfile --production
+# Upstream tree-sitter CLI downloads use glibc ELF loaders on both architectures.
+# gcompat supplies those loaders; fail here if its ABI support is insufficient.
+RUN npx --yes --package=tree-sitter-cli@0.24.7 -- tree-sitter --version
 # Rebuild native bindings against musl rather than copying glibc prebuilds.
 # Node 24 headers require C++20; older grammar gyp files default to C++17.
 RUN CXXFLAGS="-std=c++20" npm rebuild --build-from-source

@@ -36,7 +36,7 @@ unsigned staging tags behind; do not deploy them.
 
 **Reproducibility:** base images and actions are pinned by digest/commit; plugin
 runtime dependencies use the committed Bun lockfile; Claude CLI, Bun, Trivy and
-Cosign versions are explicit. Debian runtime packages are security-updated at
+Cosign versions are explicit. Alpine runtime packages are security-updated at
 build time, so rebuilds can differ. Artifact handoff avoids rebuilding between
 scan and release. Update base digests and tool versions in a reviewed PR, with
 both architecture checks passing.
@@ -106,7 +106,12 @@ architectures. Builder and runtime share v3.24 repositories; native bindings are
 rebuilt against musl. Node comes from that supported branch. Package upgrades
 are intentionally resolved at build time and recorded in the SBOM and smoke log;
 base digests and the plugin lockfile pin the other inputs. Build tools remain
-in the dependencies stage. `USE_BUILTIN_RIPGREP=0` selects Alpine ripgrep.
+in the dependencies stage. Alpine `gcompat` supplies the glibc ELF loader expected
+by upstream tree-sitter CLI downloads on amd64 and arm64; native Node bindings
+still compile against musl. The builder checks the SQL grammar generator
+(tree-sitter 0.24.7) before rebuilding; the read-only smoke checks the locked
+runtime CLI too. These probes fail if loader or ABI compatibility is missing.
+`USE_BUILTIN_RIPGREP=0` selects Alpine ripgrep.
 
 Run `bash scripts/container/smoke.sh IMAGE` for native parsing, CLI versions,
 credential replacement and read-only HTTP/worker runtime checks. The Claude

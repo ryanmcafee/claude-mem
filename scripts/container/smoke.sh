@@ -27,6 +27,7 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     rg --version
     apk info -v
     cd /opt/claude-mem
+    ./node_modules/.bin/tree-sitter --version
     node -e "const Parser = require(\"tree-sitter\"); const p = new Parser(); p.setLanguage(require(\"tree-sitter-javascript\")); const t = p.parse(\"const answer = 42;\"); if (t.rootNode.hasError) throw Error(t.rootNode.toString()); console.log(t.rootNode.toString());"
     cd /home/node
     # Config mutation requires no login/provider call and catches writes to
