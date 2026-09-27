@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Test artifact binding gate
+        run: python3 scripts/container/test-archive.py
       - name: Validate release version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
@@ -57,8 +59,8 @@ jobs:
       - name: Prove the gate rejects known-vulnerable input
         if: matrix.arch == 'amd64'
         run: |
-          docker pull alpine:3.10
-          docker save --output "$RUNNER_TEMP/known-bad.tar" alpine:3.10
+          docker pull alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
+          docker save --output "$RUNNER_TEMP/known-bad.tar" alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
           set +e
           TRIVY_FORMAT=json TRIVY_OUTPUT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
           result=$?
@@ -77,6 +79,8 @@ jobs:
           tags: claude-mem:check
           provenance: false
           sbom: false
+      - name: Verify smoke image and attestations match the scanned archive
+        run: python3 scripts/container/verify-archive.py "$RUNNER_TEMP/image.tar" "$(docker image inspect --format '{{.Id}}' claude-mem:check)" linux/${{ matrix.arch }}
       - name: Non-root read-only runtime smoke
         run: bash scripts/container/smoke.sh claude-mem:check
       - name: Hand off only the scanned archive

@@ -10,7 +10,7 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /data/claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
   --env CLAUDE_MEM_CONTAINER_MODE=shell "$image" bash -euo pipefail -c '
     test "$(id -u)" = 1000
-    for tool in cc gcc g++ make npm npx; do
+    for tool in cc gcc g++ make npm npx yarn yarnpkg; do
       if command -v "$tool"; then echo "Unexpected build tool in runtime: $tool" >&2; exit 1; fi
     done
     for path in /tmp /home/node/.claude /home/node/.claude-mem /data/claude-mem; do

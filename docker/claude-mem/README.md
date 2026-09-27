@@ -7,7 +7,7 @@ policy used by CI from the repository root:
 bash scripts/container/check.sh
 ```
 
-Requires Docker with Buildx, Bash, OpenSSL and Trivy **0.74.0**. The smoke test
+Requires Docker with Buildx, Bash, Python 3.12+, OpenSSL and Trivy **0.74.0**. The smoke test
 starts disposable Postgres and Valkey containers and performs no provider calls.
 No credentials or secrets are needed. Production provider configuration is not
 part of this test; generation against a real provider needs separate QA.
@@ -88,7 +88,9 @@ mode 0600.
 Before this change there was no container gate (0 CI minutes). The two native
 architecture jobs run concurrently with a 40-minute timeout each; publication
 has a 20-minute timeout. The health smoke has 60 seconds for Postgres and 90
-seconds for HTTP readiness. Actual build/scan timings must be recorded from the
-first CI run; these timeouts are bounds, not measurements. There is no shared
+seconds for HTTP readiness. The first run built both architectures and reached the scan gate in 99–106
+seconds per job (it exposed an OCI archive adapter error, since corrected).
+Full successful build/scan/smoke timings are still pending; timeouts are bounds,
+not measurements. There is no shared
 build cache: per-job BuildKit cache only accelerates the smoke image export,
 preventing cross-branch cache poisoning and stale dependency validation.

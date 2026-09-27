@@ -16,8 +16,8 @@ FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddf
 # curl provides the compose healthcheck; git is a Claude runtime dependency.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git \
- && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm \
- && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+ && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /opt/yarn* \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=dependencies /opt/claude-cli /opt/claude-cli
 RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
