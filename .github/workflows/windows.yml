@@ -129,14 +129,19 @@ jobs:
           irm bun.sh/install.ps1 | iex
         shell: pwsh
 
-      # Caching uv's downloads AND its managed Python keeps a cold chromadb
-      # resolve off the critical path; without it this job pays ~10 minutes on
-      # every run and routinely exceeds the timeout.
+      # Caching uv's downloads keeps a cold chromadb resolve off the critical
+      # path; without it this job pays ~10 minutes on every run and routinely
+      # exceeds the timeout.
+      #
+      # prune-cache is off because the post-job prune runs while this job's own
+      # chroma-mcp and python are still alive -- the runner only reaps them
+      # afterwards -- so uv cannot delete the cache files they hold open on
+      # NTFS and exits 2, failing the job after every gate below has passed.
       - name: Install uv (with cache)
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-python: true
+          prune-cache: false
 
       - run: npm install --no-audit --no-fund
 
