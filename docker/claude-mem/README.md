@@ -109,6 +109,8 @@ base digests and the plugin lockfile pin the other inputs. Build tools remain
 in the dependencies stage. `USE_BUILTIN_RIPGREP=0` selects Alpine ripgrep.
 
 Run `bash scripts/container/smoke.sh IMAGE` for native parsing, CLI versions,
-credential replacement and read-only HTTP runtime checks. CI retains structured
+credential replacement and read-only HTTP/worker runtime checks. The Claude
+capability probe uses the SDK-required `--permission-mode dontAsk --version`;
+empty worker queues exercise startup without provider calls. CI retains structured
 scan reports and scanner/database metadata as `scan-amd64` / `scan-arm64`,
 including failed vulnerability scans. HIGH/CRITICAL findings remain blocking.

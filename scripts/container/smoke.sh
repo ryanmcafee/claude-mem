@@ -21,7 +21,7 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     fi
     test "$(bun --version)" = 1.3.12
     node --version
-    claude --version | grep -F 2.1.283
+    claude --permission-mode dontAsk --version | grep -F 2.1.283
     git --version
     curl --version
     rg --version
@@ -44,7 +44,7 @@ bash scripts/container/credentials-smoke.sh "$image"
 name="claude-mem-smoke-$$"
 password=$(openssl rand -hex 24)
 cleanup() {
-  docker rm -f "$name-server" "$name-db" "$name-redis" >/dev/null 2>&1 || true
+  docker rm -f "$name-worker" "$name-server" "$name-db" "$name-redis" >/dev/null 2>&1 || true
   docker network rm "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -75,7 +75,30 @@ docker run --detach --name "$name-server" --network "$name" \
 for ((i=0; i<90; i++)); do
   if docker exec "$name-server" curl -fsS http://127.0.0.1:37877/healthz; then
     echo 'Non-root, read-only HTTP runtime reached /healthz with Postgres and Valkey.'
-    exit 0
+docker run --detach --name "$name-worker" --network "$name" \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,uid=1000,gid=1000,mode=1777 \
+  --tmpfs /home/node/.claude:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /home/node/.claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /data/claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --env CLAUDE_MEM_SERVER_HOST=0.0.0.0 --env CLAUDE_MEM_SERVER_PORT=37877 \
+  --env CLAUDE_MEM_QUEUE_ENGINE=bullmq --env CLAUDE_MEM_AUTH_MODE=api-key \
+  --env CLAUDE_MEM_SERVER_DATABASE_URL="postgres://smoke:$password@db:5432/smoke" \
+  --env CLAUDE_MEM_REDIS_URL=redis://redis:6379 --env CLAUDE_MEM_REDIS_MODE=docker \
+  --env CLAUDE_MEM_CONTAINER_MODE=worker --env CLAUDE_MEM_CHROMA_ENABLED=false \
+  "$image" >/dev/null
+    for ((j=0; j<60; j++)); do
+      if docker logs "$name-worker" 2>&1 | grep -F '"status":"worker-running"'; then
+        test "$(docker inspect --format '{{.State.Running}}' "$name-worker")" = true
+        echo 'Offline generation worker started on empty queues; no provider request submitted.'
+        exit 0
+      fi
+      if [[ $(docker inspect --format '{{.State.Running}}' "$name-worker") != true ]]; then break; fi
+      sleep 1
+    done
+    docker logs "$name-worker" >&2
+    echo 'Generation worker failed to start against disposable Postgres/Valkey.' >&2
+    exit 1
   fi
   if [[ $(docker inspect --format '{{.State.Running}}' "$name-server") != true ]]; then break; fi
   sleep 1
