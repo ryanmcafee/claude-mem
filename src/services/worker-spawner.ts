@@ -19,6 +19,7 @@ import {
 import { acquireSpawnLock, releaseSpawnLock } from '../shared/worker-spawn-gate.js';
 import { isPidAlive } from '../supervisor/process-registry.js';
 import { reclaimGhostListeningPort } from '../shared/port-reclaim.js';
+import { isRemoteModeRequested } from '../shared/remote-mode.js';
 
 const WINDOWS_SPAWN_COOLDOWN_MS = 2 * 60 * 1000;
 
@@ -69,7 +70,9 @@ function clearWorkerSpawnAttempted(): void {
   }
 }
 
-export type WorkerStartResult = 'ready' | 'warming' | 'dead';
+// 'remote' is not a failure: memory lives on a central server and a local
+// worker would be a second store nothing reads. See src/shared/remote-mode.ts.
+export type WorkerStartResult = 'ready' | 'warming' | 'dead' | 'remote';
 
 // Why the last spawn died, when we could prove it. ensureWorkerStarted returns
 // a three-state verdict that callers switch on, and widening that union to
@@ -87,6 +90,14 @@ export async function ensureWorkerStarted(
   workerScriptPath: string
 ): Promise<WorkerStartResult> {
   lastWorkerBootFailure = undefined;
+
+  // MCAA-237 — in remote mode memory lives on a central server. Spawning a
+  // worker here would start a second local store nothing reads, and would
+  // create a database file on a pod that is supposed to stay stateless.
+  if (isRemoteModeRequested()) {
+    logger.info('SYSTEM', 'ensureWorkerStarted: remote mode active, not spawning a local worker');
+    return 'remote';
+  }
 
   if (!workerScriptPath) {
     logger.error('SYSTEM', 'ensureWorkerStarted called with empty workerScriptPath — caller bug');

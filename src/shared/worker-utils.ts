@@ -16,6 +16,7 @@ import { checkVersionMatch, isPortInUse } from "../services/infrastructure/index
 // ProcessManager imports nothing from worker-utils, so no cycle.
 import { resolveWorkerRuntimePath } from "../services/infrastructure/ProcessManager.js";
 import { acquireSpawnLock, releaseSpawnLock } from "./worker-spawn-gate.js";
+import { isRemoteModeRequested } from "./remote-mode.js";
 import { killProcessTree } from "./kill-process-tree.js";
 import { writeJsonFileAtomic } from "./atomic-json.js";
 
@@ -599,6 +600,13 @@ async function isWorkerPortAlive(): Promise<boolean> {
 }
 
 export async function ensureWorkerRunning(): Promise<boolean> {
+  // MCAA-237 — remote mode has no local worker to ensure. Returning false (not
+  // throwing) keeps the hook callers on their existing "worker unavailable"
+  // branch instead of spawning one; the server runtime handles the write.
+  if (isRemoteModeRequested()) {
+    logger.debug('SYSTEM', 'ensureWorkerRunning: remote mode active, no local worker');
+    return false;
+  }
   // Resolve ONCE and use the result for both the staleness check and the
   // (re)spawn script below. Detection and spawn sharing this single oracle
   // is what guarantees a mismatch clears in one recycle instead of

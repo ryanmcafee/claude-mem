@@ -193,6 +193,60 @@ jobs:
         working-directory: workers/sync-hub
         run: bun run test:ws
 
+  # The multi-tenant isolation guarantee lives in SQL WHERE clauses, so its
+  # tests need a real Postgres. Without CLAUDE_MEM_TEST_POSTGRES_URL they skip,
+  # which would let a cross-tenant leak merge green — this job makes them block.
+  tenant-isolation:
+    name: tenant isolation (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: claude_mem_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d claude_mem_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CLAUDE_MEM_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/claude_mem_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # The grep guard fails the job if the suites silently skip because the
+      # database URL did not reach them.
+      - name: Tenant isolation and shared-scope migration
+        run: |
+          set -euo pipefail
+          bun test \
+            tests/server/runtime/tenant-isolation-routes.test.ts \
+            tests/storage/shared-scope-migration.test.ts 2>&1 | tee /tmp/isolation.log
+          if grep -qE '^ *[1-9][0-9]* skip' /tmp/isolation.log; then
+            echo "Postgres-gated tests skipped — CLAUDE_MEM_TEST_POSTGRES_URL did not reach the suite" >&2
+            exit 1
+          fi
+
+      - name: Remote client mode (no local worker, no local database)
+        run: bun test tests/shared/remote-mode.test.ts tests/shared/remote-mode-no-local-state.test.ts
+
   sync-api:
     name: sync-api (postgres · protocol v2 · matrix e2e)
     runs-on: ubuntu-latest
