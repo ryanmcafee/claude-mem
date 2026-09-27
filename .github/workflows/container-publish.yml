@@ -1,0 +1,170 @@
+name: Container image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*'] # Same version source as npm-publish.yml.
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check linux/${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          IS_RELEASE: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          if [[ "$IS_RELEASE" == true ]]; then
+            node -e 'const v=require("./package.json").version; if(process.env.RELEASE_TAG !== `v${v}` || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)) throw Error("Release tag must equal v + package.json version");'
+          fi
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build immutable archive with attestations
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/claude-mem/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+          sbom: true
+          provenance: mode=max
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: false
+      - name: Prove the gate rejects known-vulnerable input
+        if: matrix.arch == 'amd64'
+        run: |
+          docker pull alpine:3.10
+          docker save --output "$RUNNER_TEMP/known-bad.tar" alpine:3.10
+          set +e
+          TRIVY_FORMAT=json TRIVY_OUTPUT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
+          result=$?
+          set -e
+          test "$result" = 1
+          jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length > 0' "$RUNNER_TEMP/known-bad.json"
+      - name: Block HIGH and CRITICAL findings in the release archive
+        run: bash scripts/container/scan.sh "$RUNNER_TEMP/image.tar"
+      - name: Load cached runtime for smoke testing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/claude-mem/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: claude-mem:check
+          provenance: false
+          sbom: false
+      - name: Non-root read-only runtime smoke
+        run: bash scripts/container/smoke.sh claude-mem:check
+      - name: Hand off only the scanned archive
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  publish:
+    # This job never checks out or executes repository code. Fork PRs cannot
+    # reach it; forks can publish to their own namespace with GITHUB_TOKEN.
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-*
+          path: images
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: v3.1.3
+      - name: Install registry copy utility
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy scanned archives, assemble manifest, sign and verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}"
+          authfile="$RUNNER_TEMP/registry-auth.json"
+          trap 'rm -f "$authfile"' EXIT
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$authfile" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          refs=()
+          for arch in amd64 arm64; do
+            staging="$image:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
+            skopeo copy --all --preserve-digests --authfile "$authfile" "oci-archive:images/image-$arch/image.tar" "docker://$staging"
+            digest=$(docker buildx imagetools inspect "$staging" --format '{{json .Manifest.Digest}}' | jq -r .)
+            refs+=("$image@$digest")
+          done
+          candidate="$image:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx imagetools create --tag "$candidate" "${refs[@]}"
+          digest=$(docker buildx imagetools inspect "$candidate" --format '{{json .Manifest.Digest}}' | jq -r .)
+          subject="$image@$digest"
+          docker buildx imagetools inspect --raw "$subject" > "$RUNNER_TEMP/index.json"
+          jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64","arm64"]' "$RUNNER_TEMP/index.json"
+          jq -e '[.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length == 2' "$RUNNER_TEMP/index.json"
+          cosign sign --yes "$subject"
+          cosign verify --certificate-identity "https://github.com/$WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$subject"
+          # Promote only after both architectures, attestations and signature
+          # pass. No latest alias; prereleases never move stable version aliases.
+          tags=()
+          if [[ "$REF" == refs/heads/main && -z "$RELEASE_TAG" ]]; then
+            tags+=("$image:sha-${REVISION:0:7}")
+          else
+            version="${RELEASE_TAG:-${REF#refs/tags/}}"
+            version="${version#v}"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+            tags+=("$image:$version")
+            if [[ "$version" != *-* ]]; then
+              tags+=("$image:${version%.*}" "$image:${version%%.*}")
+            fi
+          fi
+          for tag in "${tags[@]}"; do
+            docker buildx imagetools create --prefer-index=false --tag "$tag" "$subject"
+            actual=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' | jq -r .)
+            test "$actual" = "$digest"
+          done
+          printf 'Published `%s`\n\n' "${tags[@]}" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Verified digest: `%s`\n' "$subject" >> "$GITHUB_STEP_SUMMARY"

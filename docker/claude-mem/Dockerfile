@@ -1,67 +1,40 @@
+# syntax=docker/dockerfile:1
+# Keep the native build toolchain out of the runtime image. Update the Node
+# builder/runtime digests together and keep Bun aligned with plugin/bun.lock.
+FROM oven/bun:1.3.12@sha256:8956c7667fa17beb6e3c664115e66bdacfe502da5d99603626e74c197bdef160 AS bun
+FROM node:22-bookworm@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7 AS dependencies
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /opt/claude-mem
+COPY plugin/package.json plugin/bun.lock ./
+RUN bun install --frozen-lockfile --production
+# This executable is used by the bundled agent SDK; never resolve "latest".
+ARG CLAUDE_CODE_VERSION=2.1.283
+RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
+    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-FROM node:20
-
-ENV DEBIAN_FRONTEND=noninteractive
-
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+# curl provides the compose healthcheck; git is a Claude runtime dependency.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      git \
-      curl \
-      ca-certificates \
-      unzip \
-      jq \
-      less \
-      procps \
-      uuid-runtime \
-      sqlite3 \
- && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ARG BUN_VERSION=1.3.12
-ENV BUN_INSTALL="/usr/local/bun"
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
- && chmod -R a+rX /usr/local/bun
-ENV PATH="/usr/local/bun/bin:${PATH}"
-
-ARG UV_VERSION=0.11.7
-ENV UV_INSTALL_DIR="/usr/local/bin"
-RUN set -eux \
- && curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
- && { chmod a+rX /usr/local/bin/uv /usr/local/bin/uvx 2>/dev/null || true; }
-
-RUN mkdir -p /usr/local/share/npm-global \
- && chown -R node:node /usr/local/share/npm-global
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH="/usr/local/share/npm-global/bin:${PATH}"
-
-ARG CLAUDE_CODE_VERSION=latest
-USER node
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
-
-USER root
+ && apt-get install -y --no-install-recommends ca-certificates curl git \
+ && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=dependencies /opt/claude-cli /opt/claude-cli
+RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
 COPY plugin/ /opt/claude-mem/
-RUN chown -R node:node /opt/claude-mem
-
-USER node
-RUN cd /opt/claude-mem \
- && npm install --omit=dev --legacy-peer-deps
-
-USER root
+COPY --from=dependencies /opt/claude-mem/node_modules /opt/claude-mem/node_modules
+COPY --chmod=755 docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
+# Home is intentionally immutable; only these subdirectories need volumes.
 RUN mkdir -p /home/node/.claude /home/node/.claude-mem /data/claude-mem \
- && chown -R node:node /home/node/.claude /home/node/.claude-mem /data/claude-mem
-
-COPY --chown=node:node docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
-RUN chmod +x /usr/local/bin/claude-mem-entrypoint
-
-USER node
+ && chown node:node /home/node/.claude /home/node/.claude-mem /data/claude-mem
+ENV CLAUDE_MEM_CONTAINER_MODE=server \
+    CLAUDE_MEM_RUNTIME=server-beta \
+    CLAUDE_MEM_DATA_DIR=/data/claude-mem \
+    XDG_CACHE_HOME=/tmp/.cache \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    DISABLE_AUTOUPDATER=1
+USER 1000:1000
 WORKDIR /home/node
-
-# Phase 10 — server-beta runtime is the only foregrounded process. The legacy
-# worker binaries remain available for tooling but are NEVER spawned by the
-# entrypoint. Mode selection happens via CLAUDE_MEM_CONTAINER_MODE
-# (server | worker | shell). `docker run ... bash` works because shell mode
-# falls through to "$@".
-ENV CLAUDE_MEM_CONTAINER_MODE=server
-ENV CLAUDE_MEM_RUNTIME=server-beta
-
+EXPOSE 37877
 ENTRYPOINT ["/usr/local/bin/claude-mem-entrypoint"]
 CMD []
