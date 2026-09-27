@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Test native tree-sitter lifecycle contract
+        run: python3 scripts/container/test-tree-sitter.py
       - name: Test private credential replacement
         run: python3 scripts/container/test-credentials.py
       - name: Test artifact binding gate

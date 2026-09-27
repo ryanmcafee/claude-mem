@@ -106,11 +106,18 @@ architectures. Builder and runtime share v3.24 repositories; native bindings are
 rebuilt against musl. Node comes from that supported branch. Package upgrades
 are intentionally resolved at build time and recorded in the SBOM and smoke log;
 base digests and the plugin lockfile pin the other inputs. Build tools remain
-in the dependencies stage. Alpine `gcompat` supplies the glibc ELF loader expected
-by upstream tree-sitter CLI downloads on amd64 and arm64; native Node bindings
-still compile against musl. The builder checks the SQL grammar generator
-(tree-sitter 0.24.7) before rebuilding; the read-only smoke checks the locked
-runtime CLI too. These probes fail if loader or ABI compatibility is missing.
+in the dependencies stage. The upstream Linux tree-sitter executables require glibc symbols missing from
+`gcompat` (`__res_init` on both architectures). The builder compiles CLI 0.24.7
+(SQL generator), 0.26.9 (locked runtime), and 0.23.2 (Swift dependency) natively
+with `cargo install --locked`. Container-only install lifecycle adaptation
+rejects unexpected package versions or commands; dependency updates must update
+those pins together. All addon lifecycles still run via the native musl rebuild.
+Only the installed runtime CLI binaries reach the final image, not Cargo or its
+source/build cache. Explicit generator and runtime version probes remain blocking.
+This adds three source compilations; the old failing build took 70–72 seconds,
+and successful replacement timings must be measured in native CI (40-minute job
+budget unchanged). Run `python3 scripts/container/test-tree-sitter.py` for the
+fast offline positive/negative lifecycle contract checks.
 `USE_BUILTIN_RIPGREP=0` selects Alpine ripgrep.
 
 Run `bash scripts/container/smoke.sh IMAGE` for native parsing, CLI versions,

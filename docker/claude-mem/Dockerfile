@@ -4,23 +4,32 @@ FROM oven/bun:1.3.12-alpine@sha256:26d8996560ca94eab9ce48afc0c7443825553c9a851f4
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS base
 RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cdn.alpinelinux.org/alpine/v3.24/community > /etc/apk/repositories \
  && apk upgrade --no-cache \
- && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep gcompat \
+ && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep \
  && addgroup -g 1000 node && adduser -D -u 1000 -G node node
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV USE_BUILTIN_RIPGREP=0
 FROM base AS dependencies
-# gcompat is inherited from base: both the SQL build CLI and locked runtime
-# CLI request glibc loaders. Compiler/toolchain packages stay in this stage.
-RUN apk add --no-cache npm python3 make g++ linux-headers
+# Build the exact npm CLI versions against musl; upstream Linux downloads use
+# glibc and require symbols (including __res_init) that gcompat cannot provide.
+# Cargo/toolchains and the SQL generator remain in this builder stage only.
+RUN apk add --no-cache npm python3 make g++ linux-headers cargo
+RUN for version in 0.23.2 0.24.7 0.26.9; do \
+      cargo install tree-sitter-cli --version "=$version" --locked \
+        --root "/opt/tree-sitter/$version" \
+      && "/opt/tree-sitter/$version/bin/tree-sitter" --version || exit 1; \
+    done
 WORKDIR /opt/claude-mem
 COPY plugin/package.json plugin/bun.lock ./
-RUN bun install --frozen-lockfile --production
-# Upstream tree-sitter CLI downloads use glibc ELF loaders on both architectures.
-# gcompat supplies those loaders; fail here if its ABI support is insufficient.
-RUN npx --yes --package=tree-sitter-cli@0.24.7 -- tree-sitter --version
+# Configure native CLI installers before any dependency lifecycle can download
+# or execute a glibc binary. npm rebuild below runs the dependency lifecycles.
+RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY scripts/container/configure-tree-sitter.cjs /tmp/configure-tree-sitter.cjs
+RUN node /tmp/configure-tree-sitter.cjs /opt/claude-mem/node_modules
+RUN /opt/tree-sitter/0.24.7/bin/tree-sitter --version
 # Rebuild native bindings against musl rather than copying glibc prebuilds.
 # Node 24 headers require C++20; older grammar gyp files default to C++17.
 RUN CXXFLAGS="-std=c++20" npm rebuild --build-from-source
+RUN ./node_modules/.bin/tree-sitter --version
 ARG CLAUDE_CODE_VERSION=2.1.283
 RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
