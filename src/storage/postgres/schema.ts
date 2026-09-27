@@ -22,7 +22,10 @@ export const SERVER_POSTGRES_TABLES = [
   'observation_sources',
   'observation_generation_job_events',
   'usage_events',
-  'rate_limit_counters'
+  'rate_limit_counters',
+  'corpora',
+  'corpus_members',
+  'corpus_artifacts'
 ] as const;
 
 /**
@@ -34,6 +37,20 @@ export const SERVER_POSTGRES_TABLES = [
 export const SHARED_SCOPE_DOWN_SQL = `
 DROP INDEX IF EXISTS idx_observations_shared;
 ALTER TABLE observations DROP COLUMN IF EXISTS shared;
+`;
+
+/**
+ * Down path for the MCAA-260 remote corpus tables (ADR 0001 D1). Additive
+ * forward DDL, so the rollback drops only what the corpus feature added and
+ * never touches `observations` rows. Corpora are derived state — membership is
+ * stored by reference and artifacts are a cache — so dropping them loses no
+ * captured memory; an operator re-runs `build_corpus` after rolling forward.
+ */
+export const CORPUS_DOWN_SQL = `
+DROP TABLE IF EXISTS corpus_artifacts;
+DROP TABLE IF EXISTS corpus_members;
+DROP TABLE IF EXISTS corpora;
+DROP INDEX IF EXISTS idx_observations_metadata;
 `;
 
 export async function bootstrapServerPostgresSchema(client: PostgresQueryable): Promise<void> {
@@ -356,4 +373,64 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
   PRIMARY KEY (subject_id, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters(window_start);
+
+-- MCAA-260 — remote knowledge corpora (ADR 0001 D1). A corpus is owned by
+-- (team_id, project_id) like observations, and corpus_members carries the
+-- composite FK back so a membership edge physically cannot cross tenants.
+-- Membership is by reference only: no observation content lives in corpora or
+-- corpus_members. Down: see CORPUS_DOWN_SQL above.
+CREATE TABLE IF NOT EXISTS corpora (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  filter JSONB NOT NULL DEFAULT '{}'::jsonb,
+  filter_digest TEXT NOT NULL,
+  member_scope TEXT NOT NULL DEFAULT 'project'
+    CHECK (member_scope IN ('project', 'shared')),
+  shared BOOLEAN NOT NULL DEFAULT false,
+  stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+  built_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (team_id, project_id, name),
+  UNIQUE (id, project_id, team_id),
+  FOREIGN KEY (project_id, team_id) REFERENCES projects(id, team_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS corpus_members (
+  corpus_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  team_id TEXT NOT NULL,
+  observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+  PRIMARY KEY (corpus_id, observation_id),
+  FOREIGN KEY (corpus_id, project_id, team_id)
+    REFERENCES corpora(id, project_id, team_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS corpus_artifacts (
+  id TEXT PRIMARY KEY,
+  corpus_id TEXT NOT NULL REFERENCES corpora(id) ON DELETE CASCADE,
+  content_digest TEXT NOT NULL,
+  system_prompt TEXT NOT NULL,
+  rendered TEXT NOT NULL,
+  token_estimate INTEGER NOT NULL,
+  primed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (corpus_id, content_digest)
+);
+
+CREATE INDEX IF NOT EXISTS idx_corpora_shared
+  ON corpora(shared, updated_at DESC) WHERE shared;
+
+-- Postgres does not index a referencing FK column automatically, so without this
+-- the observations -> corpus_members cascade sequential-scans corpus_members on
+-- every DELETE /v1/memories/:id, and once per row for DELETE .../memory.
+CREATE INDEX IF NOT EXISTS idx_corpus_members_observation
+  ON corpus_members(observation_id);
+
+-- metadataMatch is the documented substitute for the local concepts/files filter
+-- and runs inside a synchronous build request; unindexed it is a containment scan.
+CREATE INDEX IF NOT EXISTS idx_observations_metadata
+  ON observations USING GIN (metadata jsonb_path_ops);
 `;
