@@ -20,7 +20,7 @@ Every surface reads the same variables. The environment wins over
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `CLAUDE_MEM_SERVER_URL` | yes | Base URL of the server, e.g. `https://claude-mem.example.com`. **Setting this enables remote mode.** |
+| `CLAUDE_MEM_SERVER_URL` | yes | Base URL of the server, e.g. `https://claude-mem.example.com`. **Setting this in the environment enables remote mode.** |
 | `CLAUDE_MEM_API_KEY` | yes | API key. This is the tenant binding — the server resolves the team from it. |
 | `CLAUDE_MEM_PROJECT_ID` | yes | Project every write is recorded under. |
 | `CLAUDE_MEM_AGENT_ID` | no | Agent identity recorded on each write, alongside team and project. |
@@ -29,6 +29,17 @@ Every surface reads the same variables. The environment wins over
 
 `CLAUDE_MEM_SERVER_API_KEY` and `CLAUDE_MEM_SERVER_PROJECT_ID` are accepted as
 legacy aliases.
+
+### What triggers remote mode
+
+An environment `CLAUDE_MEM_SERVER_URL`, or `CLAUDE_MEM_RUNTIME=remote` from
+either source. A server URL in `settings.json` alone does **not** — the older
+`CLAUDE_MEM_RUNTIME=server` runtime stores its address under that same key and
+is specified to fall back to the local worker when under-configured, so treating
+that file as a trigger would turn every existing server-runtime install into a
+hard error. Configuring remote mode from a settings file therefore needs
+`CLAUDE_MEM_RUNTIME=remote` in it as well. Containers are unaffected: they set
+env vars, which trigger on their own.
 
 Remote mode never falls back. If the URL is set but the key or project is
 missing, the client raises an error naming the missing variable rather than
