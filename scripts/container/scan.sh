@@ -19,7 +19,7 @@ with tarfile.open(archive) as tar:
         print(pathlib.Path(archive).resolve())
 PYTHON
 )
-report=${TRIVY_REPORT:-$scratch/report.json}
+report=${CONTAINER_SCAN_REPORT:-$scratch/report.json}
 # No ignore-unfixed, ignore file, advisory mode, or swallowed scanner errors.
 set +e
 trivy image --config /dev/null --ignorefile /dev/null \

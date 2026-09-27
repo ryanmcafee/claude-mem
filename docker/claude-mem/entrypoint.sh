@@ -16,8 +16,15 @@ if [[ -n "${CLAUDE_MEM_CREDENTIALS_FILE:-}" ]]; then
     echo "ERROR: CLAUDE_MEM_CREDENTIALS_FILE set but file missing: $CLAUDE_MEM_CREDENTIALS_FILE" >&2
     exit 1
   fi
-  cp "$CLAUDE_MEM_CREDENTIALS_FILE" "$CLAUDE_CONFIG_DIR/.credentials.json"
-  chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"
+  # A private new inode prevents exposing bytes through a permissive existing
+  # file or following its symlink. Restrict access before the first write.
+  (
+    umask 077
+    credential_tmp=$(mktemp "$CLAUDE_CONFIG_DIR/.credentials.json.XXXXXX")
+    trap 'rm -f -- "$credential_tmp"' EXIT
+    cat -- "$CLAUDE_MEM_CREDENTIALS_FILE" > "$credential_tmp"
+    mv -fT -- "$credential_tmp" "$CLAUDE_CONFIG_DIR/.credentials.json"
+  )
 fi
 
 export PATH="/usr/local/bun/bin:/usr/local/share/npm-global/bin:$PATH"

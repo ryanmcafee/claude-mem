@@ -81,7 +81,7 @@ serves the server-beta runtime; legacy Chroma/uv tooling is outside this image's
 contract. A custom `CLAUDE_MEM_DATA_DIR` or `CLAUDE_CONFIG_DIR` requires a matching
 writable mount. Provider credentials should remain read-only Secrets; the
 entrypoint copies a supplied `CLAUDE_MEM_CREDENTIALS_FILE` into `.claude` with
-mode 0600. The entrypoint honors `CLAUDE_CONFIG_DIR`; offline fixtures verify both default and custom paths, source immutability, and missing-source failure. Each credential directory must be private to its workload.
+mode 0600 before bytes are written, then atomically replaces the destination without following existing symlinks. Failed copies leave the previous destination intact and remove temporary files. The entrypoint honors `CLAUDE_CONFIG_DIR`; offline fixtures verify both default and custom paths, source immutability, and missing-source failure. Each credential directory must be private to its workload.
 
 ## Runtime budget
 
@@ -96,3 +96,5 @@ build cache: per-job BuildKit cache only accelerates the smoke image export,
 preventing cross-branch cache poisoning and stale dependency validation.
 
 Implementation references: [BuildKit attestations](https://docs.docker.com/build/ci/github-actions/attestations/), [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/), and [Trivy image scanning](https://trivy.dev/docs/dev/references/configuration/cli/trivy_image/).
+
+The fast offline credential regression command is `python3 scripts/container/test-credentials.py`. It checks permissions before the first write, default/custom paths, permissive-file and symlink replacement, failed-copy cleanup and missing sources, using synthetic data only.

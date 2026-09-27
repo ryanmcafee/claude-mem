@@ -21,6 +21,16 @@ for config in /home/node/.claude /tmp/custom-claude; do
       cmp /run/secrets/fixture.json "$destination"
       test "$(stat -c %a "$destination")" = 600
       test "$(stat -c %u "$destination")" = 1000
+      chmod 644 "$destination"
+      claude-mem-entrypoint true
+      test "$(stat -c %a "$destination")" = 600
+      rm "$destination"
+      printf untouched > /tmp/symlink-target
+      ln -s /tmp/symlink-target "$destination"
+      claude-mem-entrypoint true
+      test ! -L "$destination"
+      test "$(cat /tmp/symlink-target)" = untouched
+      cmp /run/secrets/fixture.json "$destination"
       if echo changed >> /run/secrets/fixture.json 2>/dev/null; then
         echo "Credential source must be read-only" >&2; exit 1
       fi

@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Test private credential replacement
+        run: python3 scripts/container/test-credentials.py
       - name: Test artifact binding gate
         run: python3 scripts/container/test-archive.py
       - name: Validate release version
@@ -49,6 +51,7 @@ jobs:
           context: .
           file: docker/claude-mem/Dockerfile
           platforms: linux/${{ matrix.arch }}
+          tags: claude-mem:check
           outputs: type=oci,dest=${{ runner.temp }}/image.tar
           sbom: true
           provenance: mode=max
@@ -61,7 +64,7 @@ jobs:
         run: |
           printf 'FROM alpine:3.10@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98\n' | docker buildx build --file - --platform linux/amd64 --sbom=true --provenance=mode=max --output "type=oci,dest=$RUNNER_TEMP/known-bad.tar" .
           set +e
-          TRIVY_REPORT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
+          CONTAINER_SCAN_REPORT="$RUNNER_TEMP/known-bad.json" bash scripts/container/scan.sh "$RUNNER_TEMP/known-bad.tar"
           result=$?
           set -e
           test "$result" = 1
