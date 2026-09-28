@@ -44,8 +44,14 @@ import {
   SHARED_WRITE_SCOPE,
   SharedCorpusPrivateMembersSchema,
   CORPUS_SOURCE_PROVENANCE_FIELDS,
+  CORPUS_PROVENANCE_FIELDS,
+  CorpusDetailSchema,
+  CorpusOwnerDetailSchema,
   CorpusOwnerSourceSchema,
+  CorpusOwnerSummarySchema,
+  CorpusProjectedDetailSchema,
   CorpusProjectedSourceSchema,
+  CorpusProjectedSummarySchema,
   CorpusSourceSchema,
   WRITE_SCOPE,
   corpusContentDigest,
@@ -465,7 +471,8 @@ describe('corpus contract v1 -- response compatibility', () => {
   });
 
   it('reports a shared corpus and its member scope so a reader can tell provenance', () => {
-    const foreignShared = { ...summary, shared: true, memberScope: 'shared' as const, foreign: true };
+    const { projectId, filterDigest, ...base } = summary;
+    const foreignShared = { ...base, shared: true, memberScope: 'shared' as const, foreign: true };
     expect(CorpusSummarySchema.parse(foreignShared).foreign).toBe(true);
   });
 
@@ -549,6 +556,92 @@ describe('corpus contract v1 -- response compatibility', () => {
     });
     expect(primed).not.toHaveProperty('name');
     expect(primed.corpus.name).toBe('argocd');
+  });
+});
+
+// The corpus row itself carries provenance too: `projectId` names the owner's
+// project, and `filter`/`filterDigest` describe how they selected members.
+// Condition 13 omits all three on a non-owner read, so the schema has to be able
+// to express that response rather than reject it.
+describe('corpus contract v1 -- owner and projected corpora are mutually exclusive', () => {
+  const PROJECTED = {
+    id: 'corpus-1',
+    name: 'argocd',
+    description: 'ArgoCD rollbacks',
+    shared: true,
+    memberScope: 'shared' as const,
+    foreign: true,
+    stats: {
+      observationCount: 3,
+      matchedCount: 3,
+      truncated: false,
+      tokenEstimate: 1200,
+      kindBreakdown: { observation: 3 },
+      earliestAtEpoch: 1,
+      latestAtEpoch: 2,
+    },
+    contentDigest: 'sha256:bbb',
+    session_id: null,
+    builtAtEpoch: 3,
+    primedAtEpoch: 4,
+    createdAtEpoch: 1,
+    updatedAtEpoch: 5,
+  };
+  const OWNED = { ...PROJECTED, foreign: false, projectId: 'homelab', filterDigest: 'sha256:aaa' };
+
+  it('requires provenance on an owned corpus rather than accepting it as optional', () => {
+    expect(CorpusOwnerSummarySchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusOwnerSummarySchema.safeParse(PROJECTED).success).toBe(false);
+  });
+
+  it('accepts a projected corpus carrying no selection and no project id', () => {
+    expect(CorpusProjectedSummarySchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  it.each(CORPUS_PROVENANCE_FIELDS)('rejects %s on a projected corpus', (field) => {
+    const leaked = { ...PROJECTED, [field]: field === 'filter' ? { kinds: ['insight'] } : 'leaked' };
+    expect(CorpusProjectedSummarySchema.safeParse(leaked).success).toBe(false);
+    expect(CorpusProjectedDetailSchema.safeParse(leaked).success).toBe(false);
+  });
+
+  // Condition 13's response was previously unrepresentable: CorpusDetailSchema
+  // required `filter`, so omitting it failed the schema the server publishes.
+  it('represents a condition-13 detail response instead of failing its own schema', () => {
+    expect(CorpusProjectedDetailSchema.safeParse(PROJECTED).success).toBe(true);
+    expect(CorpusDetailSchema.safeParse(PROJECTED).success).toBe(true);
+    expect(CorpusOwnerDetailSchema.safeParse({ ...OWNED, filter: { kinds: ['insight'] } }).success).toBe(true);
+    expect(CorpusOwnerDetailSchema.safeParse(OWNED).success).toBe(false);
+  });
+
+  it('admits both variants through the response union', () => {
+    expect(CorpusSummarySchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusSummarySchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  // Half-projected is the shape a partial redaction produces: the union catches
+  // it because the owner variant requires every provenance field together.
+  it('rejects a half-projected corpus that keeps one provenance field', () => {
+    expect(CorpusSummarySchema.safeParse({ ...PROJECTED, projectId: 'homelab' }).success).toBe(false);
+    expect(CorpusSummarySchema.safeParse({ ...PROJECTED, filterDigest: 'sha256:aaa' }).success).toBe(false);
+    expect(CorpusDetailSchema.safeParse({ ...PROJECTED, filter: { kinds: ['insight'] } }).success).toBe(false);
+  });
+
+  // A projected corpus cannot carry owner member rows: that combination is the
+  // disclosure the split exists to make unstateable, not a shape to validate.
+  it('refuses an owner member row inside a projected corpus', () => {
+    const ownerRow = {
+      id: 'obs-1',
+      kind: 'insight',
+      content: 'argocd syncs from the apps/ directory',
+      shared: true,
+      position: 0,
+      createdAtEpoch: 1_700_000_000,
+      projectId: 'acme-internal-pki',
+      metadata: { agentId: 'agent-1' },
+    };
+    const { projectId, metadata, ...projectedRow } = ownerRow;
+    expect(CorpusProjectedDetailSchema.safeParse({ ...PROJECTED, sources: [ownerRow] }).success).toBe(false);
+    expect(CorpusProjectedDetailSchema.safeParse({ ...PROJECTED, sources: [projectedRow] }).success).toBe(true);
   });
 });
 
