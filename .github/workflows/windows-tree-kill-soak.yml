@@ -1,0 +1,129 @@
+name: Windows tree-kill soak
+
+# Manual only, and deliberately so.
+#
+# MCAA-375's acceptance criterion is a pass RATE: the tree-kill suite has to
+# hold across N INDEPENDENT windows-2022 runner draws. Re-running a completed
+# run replays the same runner allocation, and the Windows workflow has no
+# dispatch trigger, so the only way to get N draws there was N pushes.
+#
+# This must never join the PR-blocking set. It is not on pull_request or push
+# because a PR must not pay N Windows draws to merge.
+on:
+  push:
+    branches: [automation/mcaa-380-soak20]
+  workflow_dispatch:
+    inputs:
+      draws:
+        description: 'Independent windows-2022 draws (1-30)'
+        required: false
+        default: '20'
+
+jobs:
+  plan:
+    name: plan draws
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      draws: ${{ steps.draws.outputs.draws }}
+    steps:
+      # Validated here rather than interpolated into the matrix so a bad input
+      # fails with a readable message instead of an empty fromJson matrix that
+      # silently runs zero draws.
+      - name: Build the draw list
+        id: draws
+        env:
+          REQUESTED: ${{ inputs.draws }}
+        run: |
+          requested="${REQUESTED:-20}"
+          case "$requested" in
+            ''|*[!0-9]*)
+              echo "draws must be a positive integer, got '$requested'" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$requested" -lt 1 ] || [ "$requested" -gt 30 ]; then
+            echo "draws must be between 1 and 30, got $requested" >&2
+            exit 1
+          fi
+          echo "draws=[$(seq 1 "$requested" | paste -sd, -)]" >> "$GITHUB_OUTPUT"
+
+  soak:
+    name: draw ${{ matrix.draw }}
+    needs: plan
+    # Same windows-2022 pin and rationale as .github/workflows/windows.yml: the
+    # windows-latest image moved to windows-2025 / VS18, which npm's bundled
+    # node-gyp@11.5.0 cannot detect, breaking native rebuilds on `npm install`.
+    runs-on: windows-2022
+    timeout-minutes: 15
+    strategy:
+      # The measurement is the rate across all draws, so a red draw must not
+      # cancel the ones that have not run yet.
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        draw: ${{ fromJson(needs.plan.outputs.draws) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same installer as windows.yml, so a draw exercises the same bun the
+      # real Windows job does. The suite imports only node builtins and
+      # repo-relative sources, so it needs neither `npm install` nor a build.
+      - name: Install Bun
+        shell: pwsh
+        run: irm bun.sh/install.ps1 | iex
+
+      # No retry and no timeout change: the 20-second waitUntil waits inside
+      # the suite are what detected the orphan defect, and a retry would paper
+      # over the exact race being measured.
+      #
+      # The junit report, not the console output, is what the verdict reads.
+      # bun's console format varies with platform and TTY -- a redirected Linux
+      # run prints only a tally, with no line at all for a skipped test -- so a
+      # scrape can mistake "never ran" for "passed". junit.xml names every
+      # testcase and marks <skipped /> explicitly.
+      - name: Tree-kill suite
+        shell: pwsh
+        run: |
+          $bun = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
+          $suite = 'tests/shared/kill-process-tree-cross-platform.test.ts'
+          & $bun test $suite --timeout 120000 --reporter=junit --reporter-outfile=junit.xml *> draw.log
+          $code = $LASTEXITCODE
+          Get-Content draw.log
+          exit $code
+
+      - name: Upload draw evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tree-kill-soak-draw-${{ matrix.draw }}
+          path: |
+            draw.log
+            junit.xml
+          if-no-files-found: error
+
+  verdict:
+    name: verdict
+    needs: [plan, soak]
+    # Runs however the draws landed -- a red draw is a result, not a reason to
+    # skip the tally. Gated on plan so a rejected `draws` input reports once.
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The tally script lives in the repo, so this job needs the tree too --
+      # download-artifact alone leaves .github/scripts absent.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tree-kill-soak-draw-*
+          path: draws
+
+      # Fails when any draw did not report a pass for a tracked test. A skipped
+      # or absent test means the criterion was measured zero times, which a
+      # green run would otherwise present as evidence.
+      - name: Tabulate
+        env:
+          EXPECTED_DRAWS: ${{ needs.plan.outputs.draws }}
+        run: python3 .github/scripts/tree-kill-soak-verdict.py draws
