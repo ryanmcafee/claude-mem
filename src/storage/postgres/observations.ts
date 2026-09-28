@@ -2,6 +2,7 @@
 
 import type { JsonObject, JsonValue, PostgresQueryable } from './utils.js';
 import {
+  assertOpaqueId,
   assertProjectOwnership,
   assertSessionOwnership,
   canonicalJson,
@@ -83,6 +84,7 @@ export class PostgresObservationRepository {
   constructor(private client: PostgresQueryable) {}
 
   async create(input: {
+    /** Omit to mint one. An explicit id must be opaque — see `assertOpaqueId`. */
     id?: string;
     projectId: string;
     teamId: string;
@@ -95,6 +97,10 @@ export class PostgresObservationRepository {
     createdByJobId?: string | null;
     shared?: boolean;
   }): Promise<PostgresObservation> {
+    // Before any ownership query: an observation that can ever be published
+    // must carry an id that says nothing but "this row" (ADR 0002 D9,
+    // condition 20). Asserted here because every write path reaches this method.
+    if (input.id !== undefined) assertOpaqueId('observations.id', input.id);
     await assertProjectOwnership(this.client, input.projectId, input.teamId);
     if (input.serverSessionId) {
       await assertSessionOwnership(this.client, input.serverSessionId, input.projectId, input.teamId);
@@ -238,6 +244,7 @@ export class PostgresObservationSourcesRepository {
   constructor(private client: PostgresQueryable) {}
 
   async addSource(input: {
+    /** Omit to mint one. An explicit id must be opaque — see `assertOpaqueId`. */
     id?: string;
     observationId: string;
     projectId: string;
@@ -248,6 +255,9 @@ export class PostgresObservationSourcesRepository {
     generationJobId?: string | null;
     metadata?: JsonObject;
   }): Promise<PostgresObservationSource> {
+    // A citation row hangs off an observation that can be published, so its id
+    // is held to the same rule as the observation's own.
+    if (input.id !== undefined) assertOpaqueId('observation_sources.id', input.id);
     const observation = await queryOne<{ id: string }>(
       this.client,
       'SELECT id FROM observations WHERE id = $1 AND project_id = $2 AND team_id = $3',
