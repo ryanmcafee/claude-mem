@@ -14,6 +14,8 @@ import {
   CORPUS_ID_PATHS,
   CORPUS_PATHS,
   CorpusNameSchema,
+  corpusValidationErrorBody,
+  type CorpusValidationIssue,
   GetCorpusQuerySchema,
   ListCorporaQuerySchema,
   QueryCorpusRequestSchema,
@@ -38,11 +40,8 @@ export interface CorpusRouteDeps {
   asyncHandler(fn: (req: Request, res: Response) => Promise<void> | void): RequestHandler;
 }
 
-function sendValidationError(res: Response, issues: unknown): void {
-  res.status(CORPUS_ERRORS.validation.status).json({
-    error: CORPUS_ERRORS.validation.error,
-    issues,
-  });
+function sendValidationError(res: Response, issues: readonly CorpusValidationIssue[]): void {
+  res.status(CORPUS_ERRORS.validation.status).json(corpusValidationErrorBody(issues));
 }
 
 /**
