@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import pg from 'pg';
+import type pg from 'pg';
 import {
   bootstrapServerPostgresSchema,
   createPostgresStorageRepositories,
-  type PostgresPoolClient,
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
 import {
@@ -14,7 +13,7 @@ import {
   markGenerationFailed,
 } from '../../../src/server/generation/processGeneratedResponse.js';
 import { ModeManager } from '../../../src/services/domain/ModeManager.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
@@ -24,8 +23,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
-  let client: PostgresPoolClient;
+  let pool: pg.Pool;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
   let teamId: string;
@@ -37,12 +35,10 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     // The generation path reads the active ModeManager mode; load it so this
     // file runs standalone instead of relying on another test file's side effect.
     ModeManager.getInstance().loadMode('code');
-    client = await pool.connect();
-    schemaName = `cm_phase5_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
-    await bootstrapServerPostgresSchema(client);
-    storage = createPostgresStorageRepositories(client);
+    schemaName = await createIsolatedSchema(testDatabaseUrl, 'cm_phase5');
+    pool = poolForSchema(testDatabaseUrl, schemaName);
+    await bootstrapServerPostgresSchema(pool);
+    storage = createPostgresStorageRepositories(pool);
 
     const team = await storage.teams.create({ name: 'team-a' });
     const project = await storage.projects.create({ teamId: team.id, name: 'proj-a' });
@@ -68,26 +64,11 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       jobType: 'observation_generate_for_event',
     });
     jobId = job.id;
-
-    // Re-bind the storage layer to the pool so processGeneratedResponse's
-    // internal transactions see the test schema. We do this by setting
-    // search_path for new pool connections via on-connect hook, but pg's
-    // Pool does not expose that easily. Workaround: use the pool from the
-    // search_path-aware helper below. For these tests we monkey-patch the
-    // shared pool to set search_path on new connections.
-    pool.on('connect', (poolClient) => {
-      poolClient.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
   });
 
   afterEach(async () => {
-    if (client) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } catch {}
-      client.release();
-    }
-    pool.removeAllListeners('connect');
+    await pool.end();
+    await dropSchema(testDatabaseUrl, schemaName);
   });
 
   async function reloadJob() {
