@@ -33,6 +33,8 @@ import {
   isArtifactServable,
   type BuildCorpusRequest,
   type CorpusFilter,
+  type CorpusOwnerSummary,
+  type CorpusProjectedSummary,
   type CorpusScope,
   type CorpusSummary,
 } from '../contracts/corpus-v1.js';
@@ -98,10 +100,16 @@ export function corpusFilterDigest(filter: CorpusFilter): string {
   return `sha256:${deterministicKey([filter])}`;
 }
 
-export interface CorpusDetailView extends CorpusSummary {
-  filter: CorpusFilter;
-  sources?: Array<Record<string, unknown>>;
-}
+type Sources = { sources?: Array<Record<string, unknown>> };
+
+/**
+ * A detail response as this reader may see it. The owner variant carries the
+ * selection; the projected one cannot, so condition 13 and the response schema
+ * agree instead of contradicting each other.
+ */
+export type CorpusDetailView =
+  | (CorpusOwnerSummary & { filter: CorpusFilter } & Sources)
+  | (CorpusProjectedSummary & Sources);
 
 export interface CorpusServiceOptions {
   pool: PostgresPool;
@@ -501,18 +509,14 @@ export class CorpusService {
       latestAtEpoch: live ? live.latestAtEpoch : nullableNumber(storedStats.latestAtEpoch),
     };
     const foreign = corpus.teamId !== context.teamId;
-    return {
+    const base: CorpusProjectedSummary = {
       id: corpus.id,
-      // Same rule as the member rows: the owner's project id is provenance, not
-      // published content, so a foreign reader addresses the corpus by id only.
-      ...(foreign ? {} : { projectId: corpus.projectId }),
       name: corpus.name,
       description: corpus.description,
       shared: corpus.shared,
       memberScope: corpus.memberScope,
       foreign,
       stats,
-      filterDigest: corpus.filterDigest,
       contentDigest: context.contentDigest,
       session_id: null,
       builtAtEpoch: corpus.builtAtEpoch,
@@ -520,6 +524,11 @@ export class CorpusService {
       createdAtEpoch: corpus.createdAtEpoch,
       updatedAtEpoch: corpus.updatedAtEpoch,
     };
+    // Same rule as the member rows: the owner's project id is provenance and
+    // their filter is how they selected, so a reader outside the tenant gets
+    // neither and addresses the corpus by id only.
+    if (foreign) return base;
+    return { ...base, projectId: corpus.projectId, filterDigest: corpus.filterDigest };
   }
 
   private toDetail(corpus: PostgresCorpus, context: {
@@ -530,11 +539,10 @@ export class CorpusService {
     statsOverride?: CorpusSummary['stats'];
     sources?: Array<Record<string, unknown>>;
   }): CorpusDetailView {
-    return {
-      ...this.toSummary(corpus, context),
-      filter: corpus.filter,
-      ...(context.sources ? { sources: context.sources } : {}),
-    };
+    const summary = this.toSummary(corpus, context);
+    const sources = context.sources ? { sources: context.sources } : {};
+    if (!('projectId' in summary)) return { ...summary, ...sources };
+    return { ...summary, filter: corpus.filter, ...sources };
   }
 }
 
