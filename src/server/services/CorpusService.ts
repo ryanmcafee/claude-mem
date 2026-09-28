@@ -244,13 +244,17 @@ export class CorpusService {
       scope: input.scope,
       limit: input.limit,
     });
-    // Listing reports each corpus's stored build-time stats rather than
+    // Listing reports an owned corpus's stored build-time stats rather than
     // resolving every member set; `get_corpus` is the read that recomputes
-    // observationCount from live membership.
+    // observationCount from live membership. A foreign row resolves its members
+    // here too, because a non-owner's numbers may never come from the stored
+    // build (condition 21).
     const summaries: CorpusSummary[] = [];
     for (const row of rows) {
+      const foreign = row.teamId !== caller.teamId;
       summaries.push(this.toSummary(row, {
         teamId: caller.teamId,
+        ...(foreign ? { members: await this.loadMembers(caller, row) } : {}),
         primedAtEpoch: await this.repo.latestPrimedAt(row.id),
         contentDigest: null,
       }));
@@ -490,6 +494,7 @@ export class CorpusService {
 
   private toSummary(corpus: PostgresCorpus, context: {
     teamId: string;
+    /** Required when the corpus is foreign: a non-owner's stats are computed from these. */
     members?: readonly PostgresCorpusMember[];
     primedAtEpoch: number | null;
     contentDigest: string | null;
@@ -497,18 +502,21 @@ export class CorpusService {
   }): CorpusSummary {
     const storedStats: Record<string, unknown> = corpus.stats;
     const live = context.members ? summarizeMembers(context.members) : null;
-    const stats: CorpusSummary['stats'] = context.statsOverride ?? {
-      // observationCount comes from live membership where we have it, because a
-      // deleted or un-shared observation must make the count fall (ADR D2).
-      observationCount: live?.observationCount ?? numberOr(storedStats.observationCount, 0),
-      matchedCount: numberOr(storedStats.matchedCount, live?.observationCount ?? 0),
-      truncated: storedStats.truncated === true,
-      tokenEstimate: numberOr(storedStats.tokenEstimate, 0),
-      kindBreakdown: live?.kindBreakdown ?? recordOr(storedStats.kindBreakdown),
-      earliestAtEpoch: live ? live.earliestAtEpoch : nullableNumber(storedStats.earliestAtEpoch),
-      latestAtEpoch: live ? live.latestAtEpoch : nullableNumber(storedStats.latestAtEpoch),
-    };
     const foreign = corpus.teamId !== context.teamId;
+    const stats: CorpusSummary['stats'] = context.statsOverride
+      ?? (foreign
+        ? projectedStats(corpus, context.members ?? [])
+        : {
+          // observationCount comes from live membership where we have it, because a
+          // deleted or un-shared observation must make the count fall (ADR D2).
+          observationCount: live?.observationCount ?? numberOr(storedStats.observationCount, 0),
+          matchedCount: numberOr(storedStats.matchedCount, live?.observationCount ?? 0),
+          truncated: storedStats.truncated === true,
+          tokenEstimate: numberOr(storedStats.tokenEstimate, 0),
+          kindBreakdown: live?.kindBreakdown ?? recordOr(storedStats.kindBreakdown),
+          earliestAtEpoch: live ? live.earliestAtEpoch : nullableNumber(storedStats.earliestAtEpoch),
+          latestAtEpoch: live ? live.latestAtEpoch : nullableNumber(storedStats.latestAtEpoch),
+        });
     const base: CorpusProjectedSummary = {
       id: corpus.id,
       name: corpus.name,
@@ -563,6 +571,40 @@ export function authorizedReadProject(
   if (caller.projectScope) return caller.projectScope;
   if (caller.projectId) return caller.projectId;
   return corpus.teamId === caller.teamId ? corpus.projectId : null;
+}
+
+/**
+ * Statistics as a non-owner may see them: every number recomputed from the
+ * members that reader can resolve right now. The stored stats describe the
+ * owner's membership when they built it, so serving them would report a count,
+ * a date range and a size spanning rows that are no longer members — and a
+ * number that falls only once the owner rebuilds is itself a "this used to be
+ * larger" signal (ADR 0002 D9, conditions 16 and 21).
+ */
+function projectedStats(
+  corpus: Pick<PostgresCorpus, 'name' | 'description'>,
+  members: readonly PostgresCorpusMember[],
+): CorpusSummary['stats'] {
+  const live = summarizeMembers(members);
+  // The token estimate is over the projected render, not the owner's: theirs
+  // carries per-member metadata this reader never receives.
+  const rendered = renderCorpus({
+    name: corpus.name,
+    description: corpus.description,
+    filter: {},
+    members,
+    redactProvenance: true,
+  });
+  return {
+    ...live,
+    // The visible set is the whole set for this reader. `matchedCount` above it
+    // would report how many rows the owner's filter reached, and `truncated`
+    // would report that their `limit` dropped some — both statements about a
+    // selection outside this reader's membership.
+    matchedCount: live.observationCount,
+    truncated: false,
+    tokenEstimate: rendered.tokenEstimate,
+  };
 }
 
 function toIdentity(member: PostgresCorpusMember): { id: string; updatedAtEpoch: number; shared: boolean } {
