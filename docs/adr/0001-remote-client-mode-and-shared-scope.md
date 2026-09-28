@@ -141,16 +141,19 @@ deployment-specific branch of the storage layer (lens: **shared bones, not copie
 These were raised in the design review of PR #3 and are the conditions attached to the approval.
 They do not change the API surface approved above.
 
-1. **Cross-tenant rows disclose the publisher's identifiers.** A shared row serialized to a
-   non-owning tenant still carries the owner's `projectId` and `serverSessionId`. `projects.id` is
-   a caller-supplied string, in practice a repository or directory name, so publishing a runbook
-   also publishes the name of the project it came from. The curator intends to publish content, not
-   provenance. Before any deployment enables the shared scope or mints a curator key, cross-tenant
-   rows must be returned through a redacted projection (drop or opaque-token the owner's
-   `projectId` and `serverSessionId`). Tracked as a follow-up on MCAA-237.
-2. **Publishing must be auditable.** The observation-create audit entry does not record whether the
-   write was a shared publish. Add `shared` to that audit metadata so "who published what to every
-   tenant" is answerable from the audit log alone.
+1. **Cross-tenant rows disclose the publisher's identifiers.** *(Superseded by the MCAA-283
+   security review; resolved by PR #8 -- see "The shared-row response shape" below.)* A shared row
+   serialized to a non-owning tenant carried the owner's `projectId`, `serverSessionId`, `teamId`
+   and `metadata`. `projects.id` is a caller-supplied string, in practice a repository or directory
+   name, and the write path injects the publisher's `metadata.agentId`, so publishing a runbook also
+   published the project it came from and the agent that wrote it. Dropping two fields was found
+   insufficient: the requirement became a single allowlisted projection shared by REST and MCP, with
+   `metadata` omitted wholesale. Resolved.
+2. **Publishing must be auditable.** *(Resolved by PR #8.)* The observation-create audit entry did
+   not record whether the write was a shared publish. `shared` is now carried on both `memory.write`
+   and `observation.created` audit details -- sourced from the persisted row rather than the request
+   body, so it reflects what actually landed after the scope check -- making "who published what to
+   every tenant" answerable from the audit log alone.
 3. **The chart must not mint wildcard keys for agents.** `ensureSharedWriteAllowed` accepts the `*`
    scope, so a wildcard key can publish. Agent keys get `["memories:read","memories:write"]`; only
    the curator key adds `memories:write:shared`.
@@ -161,6 +164,98 @@ They do not change the API surface approved above.
    contract rather than inferred from the SQL.
 5. **`CLAUDE_MEM_INCLUDE_SHARED` widens reads for an entire pod, not one query.** It must stay off
    by default in the chart's values, and the value that turns it on belongs in a reviewed manifest.
+
+## The shared-row response shape (normative)
+
+Every observation leaving `/v1/search`, `/v1/context` and the three MCP recall tools is serialized
+by one function -- `serializeObservationForViewer` in
+`src/server/routes/v1/observation-projection.ts`. Centralizing it is part of the decision, not an
+implementation detail: a per-route filter leaks from whichever surface someone forgets to update.
+
+The ownership test is the query's own tenant predicate:
+
+```
+full fidelity  iff  row.teamId === viewer.teamId && row.projectId === viewer.projectId
+```
+
+The viewer is the team the API key is bound to and the project the caller asked for. It is never
+read off the row, so a forged field in a request body or MCP argument cannot promote a caller to
+the owner view. Everything else in a result set arrived through the shared branch of the predicate
+-- a foreign tenant, or the caller's own team in a project outside the query -- and gets the shared
+view. One rule covers both, so there is no second path to forget.
+
+**Owner view** (unchanged from the shape approved in PR #3): `id`, `projectId`, `teamId`,
+`serverSessionId`, `kind`, `content`, `metadata`, `shared`, `createdAtEpoch`, `updatedAtEpoch`.
+
+**Shared view**: `id`, `kind`, `content`, `shared`, `sharedOrigin`, `createdAtEpoch`,
+`updatedAtEpoch`. `teamId`, `projectId`, `serverSessionId` and `metadata` are omitted.
+
+- `metadata` is omitted **wholesale**, not filtered. Every key on a published row is
+  publisher-controlled free-form JSON, the write path injects the publisher's `metadata.agentId`,
+  and nested objects can repeat the same identifiers. `SHARED_METADATA_ALLOWLIST` is a named,
+  deliberately empty constant so that admitting a key is a reviewed edit rather than an oversight.
+- `id` is safe to emit: it is a server-generated `randomUUID()`, and the HTTP write path never
+  passes a caller-supplied id to the repository, so it carries no provenance. It is also the handle
+  a consumer needs for dedup, and owning it does not grant mutation -- cross-tenant delete by id is
+  still rejected.
+- `sharedOrigin` is the first 16 hex characters of
+  `sha256("claude-mem:shared-origin:v1:<teamId>:<projectId>")`. It is stable per publishing origin,
+  so a consumer can group results by publisher, and non-invertible, because `teamId` is a 122-bit
+  random UUID. A digest over the project id alone would have been walkable by guessing repository
+  names, which is why the team id is in the preimage.
+- `/v1/context` packs its context string from the projected rows, so the prose blob cannot carry a
+  field the `observations` array dropped.
+
+`GET /v1/events/:id/observations` is deliberately outside this projection. Its SQL binds both
+`o.team_id` and `o.project_id` to the authorized event's own scope, so every row it can return
+already satisfies the ownership test by construction; it has no shared branch to redact.
+
+## Ratification: reducing the cross-tenant row is not a breaking change
+
+The design review of PR #8 raised a fair question. A pre-existing MCAA-237 test,
+`returns both tenants only for an explicit shared-scope query`, asserted that a cross-tenant shared
+read **does** carry the publisher's `teamId`. So the previous contract did not merely happen to
+expose it -- it pinned it, and removing it reverses a contract term rather than tightening an
+unspecified one. This ADR's own rule is that a breaking contract change ships with a version and a
+migration path.
+
+**Decision: no endpoint version. The reduction ships as-is.** Two verified facts, not the
+convenience of the change, carry this:
+
+1. **The owner view is byte-identical.** The projection diverges from the pre-change serializer
+   only on the non-owner branch; the ten owner-view fields are the same fields in the same order.
+   Every read that has ever returned data in any deployment is unaffected.
+2. **The changed branch has never been reachable.** Publishing a shared row requires the
+   `memories:write:shared` grant, and no chart or manifest exists anywhere in the repository to
+   mint a key carrying it. Reading shared rows requires an explicit `scope: "shared"` or
+   `CLAUDE_MEM_INCLUDE_SHARED`, which resolves falsy when unset. No deployment has ever published a
+   shared row or read one.
+
+"Backward compatibility by default" protects a consumer you cannot see and cannot redeploy. Here
+the code path that would have produced the data has never been switched on, so the set of possible
+consumers is empty -- this is the first definition of the shared-row shape, not a reduction of a
+shipped one. The test that pinned `teamId` was asserting the behaviour of an unreachable branch,
+which is why correcting it is the right move rather than a contract violation.
+
+**This window closes at the enablement gate.** Once MCAA-286 enables the shared scope in a real
+deployment, the shape above becomes a shipped contract and any later removal needs a version and a
+migration path. The conditions below exist because deciding now is free and deciding later is not.
+
+## Conditions carried to the enablement gate (MCAA-286)
+
+1. **Re-confirm or drop `sharedOrigin` before shared scope is enabled anywhere.** Default to
+   dropping it unless a named consumer actually needs origin grouping. Adding a field later is
+   additive and costs nothing; removing one after enablement is breaking. It is also the only
+   remaining correlation channel on a projected row: it lets a reader observe that forty runbooks
+   came from the same publisher without learning who that publisher is. That is the intended
+   tradeoff, but it should be re-confirmed against a real consumer rather than a hypothetical one,
+   while doing so is still free.
+2. **Admitting any key to `SHARED_METADATA_ALLOWLIST` is a trust-boundary change.** It requires an
+   amendment to this ADR naming the key and why it is publishable, plus a test asserting that the
+   admitted key -- and only that key -- survives the projection.
+3. **The owner view must stay byte-identical to the shape recorded above.** That equality is what
+   makes this change non-breaking, so it is the first thing a future reviewer should check when the
+   projection is touched.
 
 ## Consequences
 
@@ -184,9 +279,15 @@ They do not change the API surface approved above.
 ## Compatibility tests
 
 - `tests/server/runtime/tenant-isolation-routes.test.ts` -- two keys, two tenants, over the wire:
-  default reads are tenant-only, a forged `projectId` returns nothing, `scope: "shared"` returns
-  both, an unrecognised scope fails closed, a shared row is readable but not deletable by a
-  non-owner.
+  default reads are tenant-only, a forged `projectId` returns nothing, an unrecognised scope fails
+  closed, and a shared row is readable but not deletable by a non-owner. `scope: "shared"` returns
+  both tenants' content through the shared projection: the publisher's project id appears nowhere in
+  the response body, on REST search/context or on any of the three MCP tools. A same-team row
+  published outside the queried project gets the same projection, and the same row read from its own
+  project still returns the owner view, which pins the boundary from both sides.
+- `tests/server/routes/observation-projection.test.ts` -- the projection's own rules: the exact set
+  of keys surviving a shared view, and that the origin token is stable per origin and distinct
+  across origins.
 - `tests/storage/shared-scope-migration.test.ts` -- forward DDL is idempotent and the
   `SHARED_SCOPE_DOWN_SQL` round trip restores the pre-change shape.
 - `tests/shared/remote-mode.test.ts` -- trigger precedence, including that an under-configured
