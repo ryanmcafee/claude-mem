@@ -265,25 +265,53 @@ export const CorpusSummarySchema = z.object({
 export type CorpusSummary = z.infer<typeof CorpusSummarySchema>;
 
 /**
- * Member rows, returned only for `?include=sources`. A shared corpus may only
- * contain already-shared observations (ADR D3), so the content is publishable --
- * but publishing shares content, not provenance. Outside the owning tenant these
- * rows carry the same redaction POST /v1/search { scope: 'shared' } applies
- * (MCAA-281): `projectId` and `metadata` are omitted.
+ * Provenance a projected member row must never carry. The projected schema
+ * rejects each of these by omitting it from a strict shape, so the list and the
+ * schema cannot drift apart.
  */
-export const CorpusSourceSchema = z.object({
+export const CORPUS_SOURCE_PROVENANCE_FIELDS = [
+  'projectId',
+  'teamId',
+  'serverSessionId',
+  'metadata',
+] as const;
+
+/** Fields every member row carries, whoever is reading it. */
+const CorpusSourceBaseSchema = z.object({
   id: z.string().min(1),
-  /** Omitted on a foreign corpus: caller-supplied text, usually a repo or directory name. */
-  projectId: z.string().min(1).optional(),
   kind: z.string().min(1),
   content: z.string(),
-  /** Omitted on a foreign corpus: publisher-controlled JSON, stamped with the publishing agent's id. */
-  metadata: z.record(z.string(), z.unknown()).optional(),
   shared: z.boolean(),
   /** Render index, derived from CORPUS_MEMBER_ORDER at read time, not stored. */
   position: z.number().int().nonnegative(),
   createdAtEpoch: z.number().int().nonnegative(),
+});
+
+/**
+ * A member the reader is authorized to see whole: the observation's own team
+ * AND its own project match the authenticated read. Provenance is required
+ * here, which is what makes this variant mutually exclusive with the projected
+ * one -- an optional field would let an over-sharing projected row validate.
+ */
+export const CorpusOwnerSourceSchema = CorpusSourceBaseSchema.extend({
+  /** Caller-supplied text, usually a repo or directory name. */
+  projectId: z.string().min(1),
+  /** Publisher-controlled JSON, stamped with the publishing agent's id. */
+  metadata: z.record(z.string(), z.unknown()),
 }).strict();
+
+/**
+ * A member reached through the shared branch. A shared corpus may only contain
+ * already-shared observations (ADR D3), so the content is publishable -- but
+ * publishing shares content, not provenance, and ownership is decided per
+ * member against the reader, never once per corpus (ADR D9).
+ */
+export const CorpusProjectedSourceSchema = CorpusSourceBaseSchema.strict();
+
+export const CorpusSourceSchema = z.union([
+  CorpusOwnerSourceSchema,
+  CorpusProjectedSourceSchema,
+]);
 
 export const CorpusDetailSchema = CorpusSummarySchema.extend({
   filter: CorpusFilterSchema,

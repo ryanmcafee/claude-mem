@@ -43,6 +43,10 @@ import {
   READ_SCOPE,
   SHARED_WRITE_SCOPE,
   SharedCorpusPrivateMembersSchema,
+  CORPUS_SOURCE_PROVENANCE_FIELDS,
+  CorpusOwnerSourceSchema,
+  CorpusProjectedSourceSchema,
+  CorpusSourceSchema,
   WRITE_SCOPE,
   corpusContentDigest,
   isArtifactServable,
@@ -545,6 +549,54 @@ describe('corpus contract v1 -- response compatibility', () => {
     });
     expect(primed).not.toHaveProperty('name');
     expect(primed.corpus.name).toBe('argocd');
+  });
+});
+
+// A member row's provenance crosses a tenant boundary, so the schema -- not just
+// the serializer -- has to be able to say "this row was projected". Optional
+// provenance could not: an over-sharing projected row would still validate.
+describe('corpus contract v1 -- owner and projected member rows are mutually exclusive', () => {
+  const PROJECTED = {
+    id: 'obs-1',
+    kind: 'insight',
+    content: 'argocd syncs from the apps/ directory',
+    shared: true,
+    position: 0,
+    createdAtEpoch: 1_700_000_000,
+  };
+  const OWNED = { ...PROJECTED, projectId: 'homelab', metadata: { agentId: 'agent-1' } };
+
+  it('requires provenance on an owned row rather than accepting it as optional', () => {
+    expect(CorpusOwnerSourceSchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusOwnerSourceSchema.safeParse(PROJECTED).success).toBe(false);
+  });
+
+  it('accepts a projected row carrying content and citation handles only', () => {
+    expect(CorpusProjectedSourceSchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  it.each(CORPUS_SOURCE_PROVENANCE_FIELDS)('rejects %s on a projected row', (field) => {
+    const leaked = { ...PROJECTED, [field]: field === 'metadata' ? { secret: true } : 'leaked' };
+    expect(CorpusProjectedSourceSchema.safeParse(leaked).success).toBe(false);
+  });
+
+  // teamId and serverSessionId were never in the corpus row shape. They are
+  // denied explicitly so adding them later cannot pass as an additive change.
+  it('denies teamId and serverSessionId on an owned row too', () => {
+    expect(CorpusOwnerSourceSchema.safeParse({ ...OWNED, teamId: 'team-1' }).success).toBe(false);
+    expect(CorpusOwnerSourceSchema.safeParse({ ...OWNED, serverSessionId: 's-1' }).success).toBe(false);
+  });
+
+  it('admits both variants through the response union', () => {
+    expect(CorpusSourceSchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusSourceSchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  // Half-projected is the shape a per-corpus ownership test produces when it
+  // redacts one field and forgets the other.
+  it('rejects a half-projected row that keeps one provenance field', () => {
+    expect(CorpusSourceSchema.safeParse({ ...PROJECTED, projectId: 'homelab' }).success).toBe(false);
+    expect(CorpusSourceSchema.safeParse({ ...PROJECTED, metadata: {} }).success).toBe(false);
   });
 });
 
