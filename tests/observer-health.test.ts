@@ -17,8 +17,8 @@ import {
   scrubErrorMessage,
   OBSERVER_UNHEALTHY_FAILURE_THRESHOLD,
   type ObserverHealthState,
-} from '../src/shared/observer-health.ts';
-import { QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS } from '../src/shared/quota-cooldown.ts';
+} from '../src/shared/observer-health.js';
+import { QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS } from '../src/shared/quota-cooldown.js';
 
 const repoRoot = process.cwd();
 

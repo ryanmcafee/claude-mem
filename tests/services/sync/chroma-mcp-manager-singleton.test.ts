@@ -11,7 +11,7 @@ import path from 'node:path';
 import * as realSettingsDefaultsManager from '../../../src/shared/SettingsDefaultsManager.js';
 import * as realPaths from '../../../src/shared/paths.js';
 import * as realLogger from '../../../src/utils/logger.js';
-import * as realSupervisor from '../../../src/supervisor/index.ts';
+import * as realSupervisor from '../../../src/supervisor/index.js';
 import * as realEnvSanitizer from '../../../src/supervisor/env-sanitizer.js';
 import * as realKillProcessTree from '../../../src/shared/kill-process-tree.js';
 import * as realSdkClientStdio from '@modelcontextprotocol/sdk/client/stdio.js';
