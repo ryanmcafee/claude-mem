@@ -31,6 +31,7 @@ import {
   MAX_CORPUS_TOKENS,
   corpusContentDigest,
   isArtifactServable,
+  ownerOnlyFilterFields,
   type BuildCorpusRequest,
   type CorpusFilter,
   type CorpusOwnerSummary,
@@ -138,6 +139,7 @@ export class CorpusService {
     const breadth: CorpusScope = filter.scope ?? 'project';
     const shared = request.shared === true;
     const limit = filter.limit ?? DEFAULT_CORPUS_MEMBER_LIMIT;
+    this.assertSelectionIsProjectable(filter, breadth);
 
     return withPostgresTransaction(this.options.pool, async (client) => {
       const repo = new PostgresCorpusRepository(client);
@@ -406,6 +408,28 @@ export class CorpusService {
       name,
     });
     if (!deleted) throw notFound(`Corpus "${name}"`);
+  }
+
+  /**
+   * A `shared` breadth admits other tenants' rows, and the two owner-only filter
+   * fields would then decide membership from attributes those rows never
+   * disclose -- so `matchedCount`, `observationCount` and bare membership answer
+   * exactly the question the serializer refuses. Rejected rather than applied to
+   * a subset: narrowing the predicate to owner rows would silently return foreign
+   * rows the filter says are excluded, and would put the rule in `replaceMembers`
+   * and `countCandidates` both, where the two can drift apart.
+   */
+  private assertSelectionIsProjectable(filter: CorpusFilter, breadth: CorpusScope): void {
+    if (breadth !== 'shared') return;
+    const fields = ownerOnlyFilterFields(filter);
+    if (fields.length === 0) return;
+    throw new CorpusOperationError(CORPUS_ERRORS.validation.status, {
+      error: CORPUS_ERRORS.validation.error,
+      message: `A shared-scope corpus cannot filter on ${fields.join(' or ')}. `
+        + 'That scope selects other tenants\' shared observations, whose '
+        + `${fields.join(' and ')} you never receive, so the member count would reveal them. `
+        + 'Drop the field, or use scope "project" to filter your own observations on it.',
+    });
   }
 
   private async detailFor(
