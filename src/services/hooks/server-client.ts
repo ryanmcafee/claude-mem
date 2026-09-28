@@ -139,6 +139,14 @@ export interface ServerAddObservationRequest {
   kind?: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Agent identity recorded alongside team + project (MCAA-237). */
+  agentId?: string | null;
+  /**
+   * Publish to the cross-tenant shared scope. The server requires the
+   * `memories:write:shared` grant, so an ordinary key gets a 403 rather than
+   * silently writing team-private.
+   */
+  shared?: boolean;
 }
 
 export interface ServerAddObservationResponse {
@@ -154,12 +162,20 @@ export interface ServerAddObservationResponse {
   };
 }
 
+/**
+ * Read scope (MCAA-237). `project` returns this tenant only; `shared` also
+ * returns observations other tenants published as shared. Omitted means
+ * `project`, so an existing caller never widens its reads by upgrading.
+ */
+export type ServerReadScope = 'project' | 'shared';
+
 // Phase 8 — full-text search over generated observations.
 export interface ServerSearchObservationsRequest {
   projectId: string;
   query: string;
   limit?: number;
   platformSource?: string | null;
+  scope?: ServerReadScope;
 }
 
 export interface ServerSearchObservationsResponse {
@@ -178,6 +194,7 @@ export interface ServerContextObservationsRequest {
   query: string;
   limit?: number;
   platformSource?: string | null;
+  scope?: ServerReadScope;
 }
 
 export interface ServerContextObservationsResponse {
@@ -197,6 +214,21 @@ export interface ServerJobStatusResponse {
     status: string;
     [key: string]: unknown;
   };
+}
+
+/**
+ * Merge the agent identity into the write's metadata. Returns undefined when
+ * there is nothing to send, so the caller can spread it without emitting an
+ * empty `metadata` key on requests that had none.
+ */
+function buildWriteMetadata(
+  input: { metadata?: Record<string, unknown>; agentId?: string | null },
+): { metadata: Record<string, unknown> } | undefined {
+  const agentId = (input.agentId ?? '').trim();
+  if (!agentId) {
+    return input.metadata !== undefined ? { metadata: input.metadata } : undefined;
+  }
+  return { metadata: { ...(input.metadata ?? {}), agentId } };
 }
 
 export class ServerClient {
@@ -307,18 +339,28 @@ export class ServerClient {
       // server_sessions row itself; without these the memory lands unlinked.
       ...(input.contentSessionId !== undefined ? { contentSessionId: input.contentSessionId } : {}),
       ...(input.platformSource !== undefined ? { platformSource: input.platformSource } : {}),
-      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      // Agent identity travels in metadata so the write carries the full
+      // project/tenant/agent triple without a schema change on every route.
+      ...(buildWriteMetadata(input) ?? {}),
+      ...(input.shared !== undefined ? { shared: input.shared } : {}),
     };
   }
 
   buildSearchPayload(
-    input: { projectId: string; query: string; limit?: number; platformSource?: string | null },
+    input: {
+      projectId: string;
+      query: string;
+      limit?: number;
+      platformSource?: string | null;
+      scope?: ServerReadScope;
+    },
   ): Record<string, unknown> {
     return {
       projectId: input.projectId,
       query: input.query,
       ...(input.limit !== undefined ? { limit: input.limit } : {}),
       ...(input.platformSource !== undefined ? { platformSource: normalizePlatformSourceField(input.platformSource) } : {}),
+      ...(input.scope !== undefined ? { scope: input.scope } : {}),
     };
   }
 

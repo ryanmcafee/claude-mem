@@ -29,12 +29,14 @@ import {
   isServerClientError,
   type ServerAddObservationRequest,
   type ServerContextObservationsRequest,
+  type ServerReadScope,
   type ServerRecordEventRequest,
   type ServerSearchObservationsRequest,
 } from '../services/hooks/server-client.js';
 import {
   selectRuntime,
   buildServerContext,
+  isRemoteRuntime,
   type SelectedRuntime,
   type ServerRuntimeContext,
 } from '../services/hooks/runtime-selector.js';
@@ -238,6 +240,7 @@ interface ObservationAddArgs {
   kind?: string;
   content: string;
   metadata?: Record<string, unknown>;
+  shared?: boolean;
 }
 
 const handleObservationAdd = wrapHandler('observation_add', async (args: ObservationAddArgs) => {
@@ -254,6 +257,10 @@ const handleObservationAdd = wrapHandler('observation_add', async (args: Observa
     ...(args.platformSource !== undefined ? { platformSource: args.platformSource } : {}),
     ...(args.kind !== undefined ? { kind: args.kind } : {}),
     ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+    // MCAA-237 — publishing needs the key's shared-write grant; the server 403s
+    // rather than silently downgrading the write to team-private.
+    ...(args.shared !== undefined ? { shared: args.shared } : {}),
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
   };
   const response = await ctx.client.addObservation(request);
   return formatJsonResult(response);
@@ -303,6 +310,21 @@ interface ObservationSearchArgs {
   query: string;
   limit?: number;
   platformSource?: string | null;
+  scope?: ServerReadScope;
+}
+
+/**
+ * Resolve the read scope for a query. An explicit `shared` argument wins;
+ * otherwise CLAUDE_MEM_INCLUDE_SHARED decides. Returns undefined when neither
+ * asked for it, so the request omits `scope` and the server defaults to the
+ * caller's own tenant.
+ */
+function resolveReadScope(
+  ctx: ServerAvailable,
+  requested: ServerReadScope | undefined,
+): ServerReadScope | undefined {
+  if (requested !== undefined) return requested;
+  return ctx.includeShared ? 'shared' : undefined;
 }
 
 const handleObservationSearch = wrapHandler('observation_search', async (args: ObservationSearchArgs) => {
@@ -316,6 +338,10 @@ const handleObservationSearch = wrapHandler('observation_search', async (args: O
     query: args.query,
     ...(args.limit !== undefined ? { limit: args.limit } : {}),
     ...(args.platformSource !== undefined ? { platformSource: normalizeMcpPlatformSource(args.platformSource) } : {}),
+    ...(() => {
+      const scope = resolveReadScope(ctx, args.scope);
+      return scope !== undefined ? { scope } : {};
+    })(),
   };
   const response = await ctx.client.searchObservations(request);
   return formatJsonResult(response);
@@ -326,6 +352,7 @@ interface ObservationContextArgs {
   query: string;
   limit?: number;
   platformSource?: string | null;
+  scope?: ServerReadScope;
 }
 
 const handleObservationContext = wrapHandler('observation_context', async (args: ObservationContextArgs) => {
@@ -339,6 +366,10 @@ const handleObservationContext = wrapHandler('observation_context', async (args:
     query: args.query,
     ...(args.limit !== undefined ? { limit: args.limit } : {}),
     ...(args.platformSource !== undefined ? { platformSource: normalizeMcpPlatformSource(args.platformSource) } : {}),
+    ...(() => {
+      const scope = resolveReadScope(ctx, args.scope);
+      return scope !== undefined ? { scope } : {};
+    })(),
   };
   const response = await ctx.client.contextObservations(request);
   return formatJsonResult(response);
@@ -624,6 +655,10 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         kind: { type: 'string', description: 'Observation kind (default: manual)' },
         content: { type: 'string', description: 'Observation content (required)' },
         metadata: { type: 'object', description: 'Free-form metadata object', additionalProperties: true },
+        shared: {
+          type: 'boolean',
+          description: 'Publish to the cross-tenant shared scope. Requires the memories:write:shared grant on the API key; default false keeps the observation private to your tenant.',
+        },
       },
       required: ['content'],
       additionalProperties: false,
@@ -662,6 +697,11 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         query: { type: 'string', description: 'Search query (required)' },
         platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor' },
         limit: { type: 'number', description: 'Max results (default 20, max 100)' },
+        scope: {
+          type: 'string',
+          enum: ['project', 'shared'],
+          description: "Read scope. 'project' (default) returns only your own tenant's memory; 'shared' also returns observations other tenants published as shared knowledge.",
+        },
       },
       required: ['query'],
       additionalProperties: false,
@@ -678,6 +718,11 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         query: { type: 'string', description: 'Search query (required)' },
         platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor' },
         limit: { type: 'number', description: 'Max observations (default 10, max 50)' },
+        scope: {
+          type: 'string',
+          enum: ['project', 'shared'],
+          description: "Read scope. 'project' (default) returns only your own tenant's memory; 'shared' also returns observations other tenants published as shared knowledge.",
+        },
       },
       required: ['query'],
       additionalProperties: false,
@@ -1066,6 +1111,12 @@ async function main() {
     // runtime.
     if (selectRuntime() === 'server') {
       logger.info('SYSTEM', 'MCP runtime=server — skipping worker auto-start', undefined, {});
+      return;
+    }
+    // Belt and braces for MCAA-237: selectRuntime() already reports 'server'
+    // for remote mode, but this MUST hold even if that mapping changes.
+    if (isRemoteRuntime()) {
+      logger.info('SYSTEM', 'MCP remote mode — skipping worker auto-start', undefined, {});
       return;
     }
     const workerAvailable = await ensureWorkerConnection();

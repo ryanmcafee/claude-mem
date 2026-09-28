@@ -219,6 +219,22 @@ describe('server-beta Postgres platform source scoping', () => {
       'auth bug',
       7,
       'cursor',
+      // $6 is the MCAA-237 shared-scope opt-in; false when `scope` is omitted.
+      false,
     ]);
+  });
+
+  it('passes the shared-scope opt-in only when the caller asks for it', async () => {
+    const client = new CapturingClient();
+    const repo = new PostgresObservationRepository(client);
+
+    await repo.search({ projectId: 'project-1', teamId: 'team-1', query: 'auth bug', scope: 'shared' });
+    await repo.search({ projectId: 'project-1', teamId: 'team-1', query: 'auth bug', scope: 'project' });
+    await repo.search({ projectId: 'project-1', teamId: 'team-1', query: 'auth bug' });
+
+    expect(client.calls[0].text).toContain('OR ($6 AND observations.shared)');
+    expect(client.calls[0].values[5]).toBe(true);
+    expect(client.calls[1].values[5]).toBe(false);
+    expect(client.calls[2].values[5]).toBe(false);
   });
 });
