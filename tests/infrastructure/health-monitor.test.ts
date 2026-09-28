@@ -7,6 +7,7 @@ import {
   getRunningWorkerVersion,
   checkVersionMatch
 } from '../../src/services/infrastructure/index.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 describe('HealthMonitor', () => {
   const originalFetch = global.fetch;
@@ -116,7 +117,7 @@ describe('HealthMonitor', () => {
       try {
         Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
 
-        global.fetch = mock(() => Promise.reject(new Error('fetch failed')));
+        global.fetch = mockFetch(() => Promise.reject(new Error('fetch failed')));
 
         const createServerMock = mock(() => ({
           once: mock((event: string, cb: Function) => {
@@ -153,7 +154,7 @@ describe('HealthMonitor', () => {
         // ghost reclaim, hangs with it. The abort signal is the fix: capture
         // it off the call, and model the abort as the rejection it produces.
         const inits: Array<RequestInit | undefined> = [];
-        const fetchMock = mock((_url: string, init?: RequestInit) => {
+        const fetchMock = mockFetch((_url: string, init?: RequestInit) => {
           inits.push(init);
           const abortError = new Error('The operation was aborted due to timeout');
           abortError.name = 'TimeoutError';
@@ -193,7 +194,7 @@ describe('HealthMonitor', () => {
       try {
         Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
 
-        global.fetch = mock(() => Promise.reject(new Error('ECONNREFUSED')));
+        global.fetch = mockFetch(() => Promise.reject(new Error('ECONNREFUSED')));
 
         const closeMock = mock((cb: Function) => cb());
         const createServerMock = mock(() => ({
@@ -224,7 +225,7 @@ describe('HealthMonitor', () => {
 
   describe('waitForHealth', () => {
     it('should succeed immediately when server responds', async () => {
-      global.fetch = mock(() => Promise.resolve({
+      global.fetch = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve('')
@@ -239,7 +240,7 @@ describe('HealthMonitor', () => {
     });
 
     it('should timeout when no server responds', async () => {
-      global.fetch = mock(() => Promise.reject(new Error('ECONNREFUSED')));
+      global.fetch = mockFetch(() => Promise.reject(new Error('ECONNREFUSED')));
 
       const start = Date.now();
       const result = await waitForHealth(39999, 1500);
@@ -255,7 +256,7 @@ describe('HealthMonitor', () => {
     // HEALTH_PROBE_TIMEOUT_MS. Without the remaining-ms cap, waitForHealth(100)
     // would block ~5s inside AbortSignal.timeout.
     it('should abort a fetch that never responds within the overall timeout', async () => {
-      global.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      global.fetch = mockFetch((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
         const signal = init?.signal;
         if (!signal) {
           reject(new Error('expected an abort signal'));
@@ -275,7 +276,7 @@ describe('HealthMonitor', () => {
 
     it('should succeed after server becomes available', async () => {
       let callCount = 0;
-      global.fetch = mock(() => {
+      global.fetch = mockFetch(() => {
         callCount++;
         if (callCount < 3) {
           return Promise.reject(new Error('ECONNREFUSED'));
@@ -294,7 +295,7 @@ describe('HealthMonitor', () => {
     });
 
     it('should check health endpoint for liveness', async () => {
-      const fetchMock = mock(() => Promise.resolve({
+      const fetchMock = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve('')
@@ -310,7 +311,7 @@ describe('HealthMonitor', () => {
 
     it('should honor configured worker host when polling health', async () => {
       process.env.CLAUDE_MEM_WORKER_HOST = '127.0.0.2';
-      const fetchMock = mock(() => Promise.resolve({
+      const fetchMock = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve('')
@@ -327,7 +328,7 @@ describe('HealthMonitor', () => {
       // binds a single family, so SettingsDefaultsManager pins it to the
       // IPv4 loopback (#2992) — the poll URL must reflect that.
       process.env.CLAUDE_MEM_WORKER_HOST = 'localhost';
-      const fetchMock = mock(() => Promise.resolve({
+      const fetchMock = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve('')
@@ -340,7 +341,7 @@ describe('HealthMonitor', () => {
     });
 
     it('should use default timeout when not specified', async () => {
-      global.fetch = mock(() => Promise.resolve({
+      global.fetch = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve('')
@@ -354,7 +355,7 @@ describe('HealthMonitor', () => {
 
   describe('checkVersionMatch', () => {
     it('reads the running worker version from /api/health, not /api/version', async () => {
-      const fetchMock = mock(() => Promise.resolve({
+      const fetchMock = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify({ version: '13.10.1' }))
@@ -368,7 +369,7 @@ describe('HealthMonitor', () => {
     });
 
     it('assumes match when the worker version is unavailable', async () => {
-      global.fetch = mock(() => Promise.reject(new Error('ECONNREFUSED')));
+      global.fetch = mockFetch(() => Promise.reject(new Error('ECONNREFUSED')));
 
       const result = await checkVersionMatch(39999, '13.12.0');
 
@@ -377,7 +378,7 @@ describe('HealthMonitor', () => {
     });
 
     it('assumes match when the caller-supplied expected version is unknown', async () => {
-      global.fetch = mock(() => Promise.resolve({
+      global.fetch = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify({ version: '13.11.0' }))
@@ -391,7 +392,7 @@ describe('HealthMonitor', () => {
     });
 
     it('detects a mismatch against the caller-supplied expected version', async () => {
-      global.fetch = mock(() => Promise.resolve({
+      global.fetch = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify({ version: '13.11.0' }))
@@ -405,7 +406,7 @@ describe('HealthMonitor', () => {
     });
 
     it('detects a match against the caller-supplied expected version', async () => {
-      global.fetch = mock(() => Promise.resolve({
+      global.fetch = mockFetch(() => Promise.resolve({
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify({ version: '13.12.0' }))
