@@ -154,7 +154,7 @@ describe('HealthMonitor', () => {
         // ghost reclaim, hangs with it. The abort signal is the fix: capture
         // it off the call, and model the abort as the rejection it produces.
         const inits: Array<RequestInit | undefined> = [];
-        const fetchMock = mockFetch((_url: string, init?: RequestInit) => {
+        const fetchMock = mockFetch((_url, init) => {
           inits.push(init);
           const abortError = new Error('The operation was aborted due to timeout');
           abortError.name = 'TimeoutError';
@@ -256,7 +256,7 @@ describe('HealthMonitor', () => {
     // HEALTH_PROBE_TIMEOUT_MS. Without the remaining-ms cap, waitForHealth(100)
     // would block ~5s inside AbortSignal.timeout.
     it('should abort a fetch that never responds within the overall timeout', async () => {
-      global.fetch = mockFetch((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      global.fetch = mockFetch((_input, init) => new Promise((_resolve, reject) => {
         const signal = init?.signal;
         if (!signal) {
           reject(new Error('expected an abort signal'));

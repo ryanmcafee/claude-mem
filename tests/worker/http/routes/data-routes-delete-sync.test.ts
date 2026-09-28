@@ -7,6 +7,7 @@ import type { Request, Response } from 'express';
 import { SessionStore } from '../../../../src/services/sqlite/SessionStore.js';
 import { CloudSync } from '../../../../src/services/sync/CloudSync.js';
 import { DataRoutes } from '../../../../src/services/worker/http/routes/DataRoutes.js';
+import { mockFetch } from '../../../helpers/fetch-mock';
 
 describe('DataRoutes synchronized delete APIs', () => {
   let db: Database;
@@ -27,7 +28,7 @@ describe('DataRoutes synchronized delete APIs', () => {
       CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: 'test',
     }, {
       settingsPath: join(tempDir, 'settings.json'),
-      fetchImpl: mock(async () => new Response('{}', { status: 500 })) as typeof fetch,
+      fetchImpl: mockFetch(async () => new Response('{}', { status: 500 })),
     });
 
     db.prepare(`
