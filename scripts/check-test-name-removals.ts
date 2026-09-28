@@ -4,7 +4,7 @@
 // Fails a PR that drops a test title from a gated suite (MCAA-395).
 //
 // Taking one side of a conflicted test file wholesale compiles, keeps the file
-// present, and keeps the suite green — the assertions are just fewer. Both
+// present, and keeps the suite green -- the assertions are just fewer. Both
 // confirmed instances were caught only by simulating the merge order by hand.
 // Comparing each changed gated suite's titles against the merge base turns that
 // silence into a red build.
@@ -156,14 +156,14 @@ console.error(
     `check-test-name-removals: ${unwaived.length} test title(s) removed from a gated suite without declaring it.`,
     '',
     'A conflict resolution that takes one side of a test file wholesale drops the other',
-    "side's assertions while the suite still passes. If the removal is intended — including",
-    'a deliberate rename, since a title is the only identity a test has — declare it:',
+    "side's assertions while the suite still passes. If the removal is intended (including",
+    'a deliberate rename, since a title is the only identity a test has), declare it:',
     '',
     `  - label the PR "${TESTS_REMOVED_LABEL}", or`,
     '  - add a commit trailer naming each removal and why:',
     '      Removed-test: "<exact test title>" replaced by <what covers it now>',
     '',
-    'Otherwise restore the missing tests — re-derive where they belong rather than',
+    'Otherwise restore the missing tests -- re-derive where they belong rather than',
     'pasting them back by line position.',
   ].join('\n'),
 );

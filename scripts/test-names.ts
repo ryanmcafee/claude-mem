@@ -55,7 +55,7 @@ function titleOf(argument: ts.Expression | undefined): string {
 type CallKind = 'test' | 'describe' | 'other';
 
 /**
- * `it.each([...])` is a factory whose own call carries the table, not a title —
+ * `it.each([...])` is a factory whose own call carries the table, not a title --
  * only the call it returns declares a test.
  */
 function classify(call: ts.CallExpression): CallKind {
@@ -154,6 +154,7 @@ export function parseRemovalWaivers(commitBodies: string): RemovalWaiver[] {
   const waivers: RemovalWaiver[] = [];
 
   for (const match of commitBodies.matchAll(REMOVED_TEST_TRAILER)) {
+    // Dash variants included because an author types whichever their editor inserts.
     const reason = match[3].replace(/^[\s\-:|—–]+/, '').trim();
     if (reason.length === 0) continue;
     waivers.push({ title: match[2], reason });
