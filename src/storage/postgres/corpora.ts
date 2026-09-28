@@ -35,8 +35,13 @@ export interface PostgresCorpusMemberIdentity {
   shared: boolean;
 }
 
-/** One member row as the renderer sees it. */
+/**
+ * One member row as the renderer sees it. `teamId` and `projectId` are the
+ * observation's own, never the corpus's: ownership is decided per member
+ * against the reader (ADR D9).
+ */
 export interface PostgresCorpusMember extends PostgresCorpusMemberIdentity {
+  teamId: string;
   projectId: string;
   kind: string;
   content: string;
@@ -83,6 +88,7 @@ interface CorpusRow {
 interface MemberRow {
   id: string;
   project_id: string;
+  team_id: string;
   kind: string;
   content: string;
   metadata: unknown;
@@ -358,8 +364,9 @@ export class PostgresCorpusRepository {
   }): Promise<PostgresCorpusMember[]> {
     const result = await this.client.query<MemberRow>(
       `
-        SELECT observations.id, observations.project_id, observations.kind, observations.content,
-               observations.metadata, observations.shared, observations.created_at, observations.updated_at
+        SELECT observations.id, observations.project_id, observations.team_id, observations.kind,
+               observations.content, observations.metadata, observations.shared,
+               observations.created_at, observations.updated_at
         FROM corpus_members
         INNER JOIN observations ON observations.id = corpus_members.observation_id
         WHERE corpus_members.corpus_id = $1
@@ -534,6 +541,7 @@ function mapMemberRow(row: MemberRow): PostgresCorpusMember {
   return {
     id: row.id,
     projectId: row.project_id,
+    teamId: row.team_id,
     kind: row.kind,
     content: row.content,
     metadata: toJsonObject(row.metadata),
