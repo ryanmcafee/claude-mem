@@ -9,11 +9,16 @@ suite declared. `skipped` is a failure on purpose: it means the assertion ran
 zero times, and a run that stayed green on it would look like evidence for an
 acceptance criterion nothing measured.
 
-The tracked set is read from the reports rather than hard-coded, so a test that
-only exists on an unmerged branch is enforced there and does not fail the soak
-on trees that do not carry it. `REQUIRED` is the floor that keeps an empty or
-collapsed report from passing, and cross-draw set agreement catches a test that
-runs on some runners but not others.
+Two separate checks decide the exit status, because "which tests ran" and "how
+they landed" fail in different ways:
+
+- every name in the required set must appear in every draw. The set is declared
+  by the caller through REQUIRED_TESTS and defaults to both of MCAA-375's
+  acceptance tests, so a tree that does not carry one of them fails loudly
+  instead of reporting a green tally that measured it zero times. A soak against
+  a branch that legitimately predates a test narrows the set explicitly.
+- every test any draw ran must have run in all of them, which catches a test
+  that appears on some runners but not others.
 """
 
 from __future__ import annotations
@@ -26,7 +31,21 @@ from pathlib import Path
 
 SUITE = "killProcessTree end-to-end on this platform"
 
-REQUIRED = ("kills the root AND its descendant",)
+DEFAULT_REQUIRED = (
+    "kills the root AND its descendant",
+    "reaps a descendant when the root is already gone at call time",
+)
+
+
+def required_tests() -> tuple[str, ...]:
+    """Names the caller demands every draw ran, else both acceptance tests.
+
+    Semicolons split as well as newlines: the dispatch UI renders a one-line
+    box, so a newline-only syntax would be unreachable from it.
+    """
+    raw = os.environ.get("REQUIRED_TESTS", "").replace(";", "\n")
+    named = tuple(line.strip() for line in raw.splitlines() if line.strip())
+    return named or DEFAULT_REQUIRED
 
 
 def expected_draws() -> list[int]:
@@ -76,7 +95,11 @@ def main() -> int:
         for draw in expected_draws()
     }
     usable = {draw: row for draw, row in reads.items() if isinstance(row, dict)}
-    names = sorted({name for row in usable.values() for name in row})
+    required = required_tests()
+    # Required names join the table even when no draw ran them, so an absent
+    # acceptance test is tabulated rather than silently dropped from the report.
+    observed = {name for row in usable.values() for name in row}
+    names = sorted(observed | set(required))
 
     adverse = [f"draw {draw}: {row}" for draw, row in sorted(reads.items()) if isinstance(row, str)]
     for draw, row in sorted(usable.items()):
@@ -84,11 +107,11 @@ def main() -> int:
             adverse.append(f"draw {draw}: reported zero tests for {SUITE!r}")
             continue
         adverse.extend(
-            f"draw {draw}: required test absent -> {name}" for name in REQUIRED if name not in row
+            f"draw {draw}: required test absent -> {name}" for name in required if name not in row
         )
         adverse.extend(
             f"draw {draw}: test other draws ran is absent here -> {name}"
-            for name in names
+            for name in sorted(observed - set(required))
             if name not in row
         )
         adverse.extend(f"draw {draw}: {name} -> {row[name]}" for name in sorted(row) if row[name] != "pass")

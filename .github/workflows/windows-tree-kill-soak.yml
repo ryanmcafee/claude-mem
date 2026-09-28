@@ -16,6 +16,10 @@ on:
         description: 'Independent windows-2022 draws (1-30)'
         required: false
         default: '20'
+      require:
+        description: 'Test names (; or newline separated) that must run in EVERY draw. Blank = both MCAA-375 acceptance tests.'
+        required: false
+        default: ''
 
 jobs:
   plan:
@@ -147,10 +151,16 @@ jobs:
           pattern: tree-kill-soak-draw-*
           path: draws
 
-      # Fails when any draw did not report a pass for a tracked test. A skipped
-      # or absent test means the criterion was measured zero times, which a
-      # green run would otherwise present as evidence.
+      # Fails when any draw did not report a pass for every test, or when a
+      # required test did not run at all. An absent or skipped test means the
+      # criterion was measured zero times, which a green run would otherwise
+      # present as evidence for it.
+      #
+      # REQUIRED_TESTS defaults to both acceptance tests when the input is
+      # blank, so the strict set is what a plain dispatch measures. Narrow it
+      # only to soak a tree that predates one of them.
       - name: Tabulate
         env:
           EXPECTED_DRAWS: ${{ needs.plan.outputs.draws }}
+          REQUIRED_TESTS: ${{ inputs.require }}
         run: python3 .github/scripts/tree-kill-soak-verdict.py draws
