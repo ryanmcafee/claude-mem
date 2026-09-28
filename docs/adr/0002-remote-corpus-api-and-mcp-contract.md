@@ -1,8 +1,10 @@
 # ADR 0002 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 9 -- conditions 18 and 19 are recorded satisfied
-  against MCAA-260's branch; no condition text and no decision changes)
-- Date: 2026-09-28 (revisions 3-9; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 10 -- conditions 13 and 14 are recorded satisfied,
+  condition 14's *reject* branch is ratified, the 201-to-400 narrowing it
+  introduces is ruled a contract definition rather than a breaking change, and
+  conditions 22-23 carry what checking those two found)
+- Date: 2026-09-28 (revisions 3-10; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
@@ -33,7 +35,14 @@
   retires three sentences in this header and the index that described a divergence
   PR #7 has since closed. Recording satisfaction is not a second review; the code
   was checked against the condition, which is the standard the conditions preamble
-  sets.
+  sets. Revision 10 answers a design note the implementing engineer raised on PR #7
+  rather than assuming: condition 14's reject branch turns a request that returned
+  201 into a 400. It is ratified and ruled a contract *definition*, not a breaking
+  change -- see "Revision 10" below for the four facts that ruling rests on.
+  Conditions 13 and 14 are recorded satisfied, and conditions 22-23 carry the two
+  gaps that checking them surfaced. No second review is required: the ruling
+  narrows an unreleased surface and the new conditions tighten this record's own
+  keeps without moving a boundary.
 - **Numbering, canonical.** This record is ADR **0002**. ADR **0001** is
   "Remote client mode, tenant binding and opt-in shared scope" (PR #6). MCAA-348's
   review cites this document as `0001-remote-corpus-api-and-mcp-contract.md` and
@@ -360,7 +369,7 @@ and the recall tools now project any row reached through the shared branch down 
 content plus an opaque origin token. The "same rows a shared search would return"
 equivalence therefore no longer licenses returning the stored row -- it licenses
 returning the *projection* of it. Any corpus surface that returns more is a way
-around that projection. D9 states the rule; conditions 10-21 are what enforce it.
+around that projection. D9 states the rule; conditions 10-23 are what enforce it.
 
 Worth recording why the build-time invariant is currently airtight: there is **no
 `UPDATE observations` statement anywhere in the repository.** Observations are
@@ -730,6 +739,15 @@ mistake that was actually made:
    cannot disagree. `platformSource` gets the same treatment unless and until it
    is explicitly classified as published information.
 
+   **The rejection is prospective, by construction.** It is a gate on the build,
+   and every read path serves stored `corpus_members` rather than re-running
+   selection, so membership already materialized under the old rule keeps its
+   foreign members -- projected per reader, so their `metadata` is withheld, but
+   the count over them is not, and the count was the oracle. Closing this channel
+   therefore has two parts: the gate, and a purge of membership selected before it
+   (condition 23). Stated because the natural reading of "the oracle is closed" is
+   that it closed retroactively, and it does not.
+
 **`sharedOrigin` is not in v1, on either surface.** Revisions 3-4 required this
 field and revision 4 specified how to build it. Revision 5 withdraws the
 requirement, because ADR 0001 (remote client mode and shared scope) had already
@@ -983,7 +1001,7 @@ guarantee this ADR claims.
    retyping them, so the compatibility tests guard the shipped surface.
 9. **A cross-tenant `:name` or `:corpusId` returns `404`, never `403`.**
 
-Conditions 10-21 enforce D9. Added in revision 3 from the MCAA-345 review of
+Conditions 10-23 enforce D9. Added in revision 3 from the MCAA-345 review of
 MCAA-260; 10, 12 and 13 rewritten and 14-16 added in revision 4 from the MCAA-348
 second review; 17 added and the timing corrected in revision 6; 18 and 19 added in
 revision 7; 20 and 21 added in revision 8, from two MCAA-348 sub-clauses that
@@ -1074,6 +1092,19 @@ describing the old code went stale.
     confirmable by guessing and was never the rebuild signal revision 3 claimed it
     was. A version handle for non-owners, if wanted, is a server-generated opaque
     revision id not derived from filter contents.
+
+    **Satisfied at `30b8347b`**, both halves, checked at MCAA-260's head
+    `ad85206c`. The response half: `toSummary()` returns the
+    `CorpusProjectedSummary` base alone when `foreign`, so `projectId` and
+    `filterDigest` are absent rather than null, and `toDetail()` keys `filter` off
+    `'projectId' in summary` -- one decision, so a projected corpus cannot acquire
+    a filter without also acquiring a project id, which condition 18's schemas
+    then reject. The prompt half: `buildSystemPrompt()` gained
+    `redactProvenance`, passed as `foreign` on the query path and `true` on the
+    projected render path, and it suppresses `kinds`, `query` and
+    `platformSource` together. Keeping the member count and date range is correct
+    and stated -- both are recomputed over the projected members per conditions 16
+    and 21. Four render tests carry it with no Postgres.
 14. **Close the selection oracle.** Apply `metadataMatch` only to owner-authorized
     rows, or reject a filter that would test foreign rows on a metadata predicate
     the caller cannot see; treat `platformSource` the same way. Selection and
@@ -1081,6 +1112,41 @@ describing the old code went stale.
     `observationCount` / bare membership answer the question the serializer
     refused. The test: changing only hidden metadata on a foreign row must not
     change any value a non-owner can observe.
+
+    **Satisfied at `73d01cd4`** by the **reject** branch, which this record
+    ratifies as the better of the two it offered. The disclosure was live and
+    needed no special grant: `memberPredicate()` is
+    `((own project AND own team) OR ($shared AND observations.shared))`, so a
+    `scope: 'shared'` build in the caller's *own* project admitted every tenant's
+    shared rows, `buildFilterClauses()` then tested those rows on `metadataMatch`,
+    and `observationCount` / `matchedCount` read the answer back. The serializer
+    redaction cannot reach it because nothing is serialized -- the count is the
+    disclosure.
+
+    Why reject beats narrowing, on this record's own lenses: narrowing returns
+    foreign rows the caller's filter says are excluded with no error explaining
+    why, and it needs the same rule inside `replaceMembers()` and
+    `countCandidates()`, which is the two-copies failure mode condition 12 exists
+    to prevent. Reject needs the rule once. Verified structurally rather than by
+    inspection: `build()` is the only method that calls either repository method,
+    `assertSelectionIsProjectable()` runs before the transaction opens so nothing
+    is written, and `rebuild()` reconstructs a `BuildCorpusRequest` from the
+    stored row and calls `build()`, so a filter stored before this gate cannot
+    keep working. REST and `/v1/mcp` share the gate because both call the method.
+    `ownerOnlyFilterFields()` lives in the contract next to the schema and mirrors
+    the SQL's emptiness rules -- absent `metadataMatch`, `{}`, and a null
+    `platformSource` emit no clause, so they test nothing and stay accepted, which
+    is what makes selection, counting and the gate agree.
+
+    Leaving `kinds`, `query` and the date bounds ungated is accepted: they test
+    `kind`, `content` and `createdAtEpoch`, which a projected member row carries
+    in full, so they disclose nothing the reader does not already receive.
+
+    The error message's suggested fallback is accurate, which is why it is
+    accepted as the migration path: `scope: 'project'` is `own project AND own
+    team`, and `shared` is a flag on those rows, so an owner filtering their own
+    observations on metadata loses exactly the foreign rows they could never
+    filter on and nothing else.
 15. **No `sharedOrigin`, and no other provenance token, on a projected row**
     (revision 5, replacing revision 4's pseudonym requirement -- D9 explains why).
     The projected member set is exactly `id`, `kind`, `content`, `shared`,
@@ -1113,6 +1179,15 @@ describing the old code went stale.
     the defect read as already handled -- three reviewers checked the field set
     against a contract that was itself citing the wrong surface. A stale
     justification is worse than none, because the next reader stops there.
+
+    **Extended in revision 10: the sentence has a second copy this condition did
+    not name.** `corpus-v1.ts` is clean at `ad85206c`, but the same retired premise
+    survives verbatim in `CorpusService.ts` above `loadMembers()` -- "they are the
+    same rows POST /v1/search { scope: 'shared' } would already return" -- and that
+    is the comment sitting on the projection call itself, so it is the more
+    misleading of the two. Correct it there on the same merge. Grep the retired
+    premise across `src/` rather than fixing the file this condition happens to
+    name; the defect is a claim, not a location.
 18. **The corpus-level fields need the same treatment as the member rows** -- new in
     revision 7, and the one part of conditions 13 and 16 the contract at `3b8f002f`
     does not yet express. Three concrete gaps, all in `corpus-v1.ts`:
@@ -1202,6 +1277,43 @@ describing the old code went stale.
     was previously larger. D9 explains why this record avoids the disclosure rather
     than accepting it. The test: remove a foreign member, and no value a non-owner
     can observe changes except the ones describing the membership they can now see.
+
+22. **State condition 14's refusal in the contract, not only in the service** --
+    new in revision 10, and a contract-shape gate on the same merge, not a
+    behaviour change. `ownerOnlyFilterFields()` is correctly placed in
+    `corpus-v1.ts`, but `CorpusFilterSchema` still *accepts*
+    `{ scope: 'shared', metadataMatch: {...} }`. So the published schema describes a
+    request the server always refuses, and an SDK or agent validating against it
+    builds that request, ships it, and learns the rule only from a 400 at runtime.
+    This record is API-first: a contract that cannot state its own invariant is the
+    same defect condition 18 fixed one level up, where a correct non-owner response
+    could not be represented. Resolve it the same way -- a `superRefine` on the
+    filter (or two mutually exclusive strict filter variants) that calls the
+    *existing* `ownerOnlyFilterFields()`, so the rule has one definition enforced at
+    two points rather than two copies, which is what condition 12 actually asks for.
+    Keep `assertSelectionIsProjectable()`: the server stays the authority and must
+    never depend on a client having validated. The test: the same filter that
+    returns 400 from the route also fails `CorpusFilterSchema.parse()`.
+23. **Condition 14's gate is prospective; say so, and purge what it cannot reach**
+    -- new in revision 10. `assertSelectionIsProjectable()` runs in `build()`, and
+    every read path (`prime`, `query`, `getByName`, `getById`) serves stored
+    `corpus_members` via `loadMembers()` rather than re-running selection. So a
+    corpus whose membership was materialized under the pre-gate rule keeps its
+    foreign members and keeps answering the oracle through `observationCount`
+    forever: `listMembers()` projects those member rows per reader, so their
+    `metadata` is withheld, but the **count over them is not**, and the count was
+    the disclosure. `rebuild()` now fails closed with a 400, which is right, and
+    also means such a corpus can never be repaired in place -- only deleted.
+
+    Required of the implementing engineer, and it is not a data migration:
+    condition 11's purge must name pre-gate `corpus_members` alongside
+    `corpus_artifacts` and run in the same change, for the reason condition 11
+    already gives -- purging one cache while the other still holds the answer moves
+    the disclosure one indirection out. On an unreleased surface with no production
+    corpora this is expected to be an empty delete; an empty delete with a stated
+    scope is a discharge, an unstated assumption is not. D9 states the
+    prospectiveness itself, because that sentence belongs to this record and PR #4
+    owns it (condition 19) -- done in revision 10, not assigned onward.
 
 Recommended, not blocking: the `corpus_members(observation_id)` and
 `observations.metadata` GIN indexes in D1 (both are hot paths, not
@@ -1426,3 +1538,68 @@ That also explains why this revision exists rather than the next reviewer findin
 MCAA-348 is `done` and its verdict was applied once, in revision 4. Nothing re-checks
 an applied verdict against the conditions it was supposed to become. This re-read was
 the check, and conditions 20-21 are what it found.
+
+## Revision 10 -- the 201-to-400 narrowing is a definition, not a break
+
+The implementing engineer closed conditions 13 and 14 at `30b8347b` and `73d01cd4`
+and raised one design note rather than assuming it: condition 14's reject branch
+turns a `POST /v1/projects/{project}/corpora` request that previously returned 201
+into a 400. He was right to ask. This record's own bar is that a breaking contract
+change never ships without a version and a migration path, and on its face a
+narrowed accept set is exactly that.
+
+**Ruling: ratified, and it is a contract definition rather than a breaking change.
+No version bump, no migration path, `CORPUS_CONTRACT_VERSION` stays 1.** Four facts
+carry it, each checked rather than taken:
+
+1. **No consumer can observe the old behaviour.** `scope: 'shared'` corpus builds
+   exist only on the remote surface PR #7 introduces. The surface is unreleased, so
+   the 201 was never promised to anyone. The compatibility rule binds on a released
+   contract; here the contract is still being written, and writing it narrower is
+   the normal case.
+2. **The local worker API is untouched, so D8 still holds.** The gate and
+   `ownerOnlyFilterFields()` are reachable only from `src/server/**` and its tests --
+   verified by grep across `src/` and `tests/`, not inferred from the directory
+   name. The local worker's corpus build is a separate implementation against
+   SQLite and keeps its current accept set. A local caller sees no change.
+3. **The error vocabulary does not widen.** The refusal reuses
+   `CORPUS_ERRORS.validation` and its existing 400, so no client gains a new status
+   code or error shape to handle -- only a new reason inside one it already handles.
+4. **The refusal has an in-contract fallback, and it is accurate.**
+   `scope: 'project'` is `own project AND own team` and `shared` is a flag on those
+   rows, so the caller keeps every row of their own, shared or not, and loses only
+   foreign rows -- which are precisely the rows a metadata predicate must not test.
+   A narrowing whose fallback preserves the caller's whole legitimate intent is a
+   different thing from one that removes a capability.
+
+Fact 1 is the one doing the work, and it is also the one with a shelf life. It stops
+being true at first release. So the ruling is scoped: **this reasoning is available
+once, before the corpus surface ships.** A later narrowing of the same accept set
+needs a version and a migration path, and "we did it before" is not the precedent --
+"nobody could see it before" was the reason.
+
+Two gaps came out of checking the two conditions rather than reading the claim, and
+they are conditions 22 and 23:
+
+| Found | Why it matters | Now |
+| --- | --- | --- |
+| `CorpusFilterSchema` still accepts the combination the service always refuses | The published contract describes a request that cannot succeed, so an SDK learns the rule from a runtime 400. Same defect as condition 18 one level up | Condition 22: state it in the schema via the existing `ownerOnlyFilterFields()`, keep the service gate as the authority |
+| The gate is in `build()`, but reads serve stored `corpus_members` | A corpus built under the pre-gate rule keeps its foreign members, and `observationCount` over them is still the oracle -- projection withholds their `metadata`, not their count | Condition 23: condition 11's purge names pre-gate membership too, and D9 says the gate is prospective |
+
+Both are the same shape as the finding the engineer described as "redact the rows and
+not the prompt and the disclosure moves one indirection out". Condition 23 is that
+sentence applied once more, to the count instead of the prompt: this record has now
+found the pattern at the serializer, the system prompt, the artifact cache and the
+stored membership. That is the fifth instance of the mechanism in the "Process note"
+lineage, and the first one where the indirection is *stored state* rather than a
+rendered copy -- which is why it needs a purge and not just a code change.
+
+Process note. Conditions 13 and 14 were reported as blocked-by-association and were
+not blocked: both are about *selection* and the *prompt*, and the blocker
+([MCAA-281](/MCAA/issues/MCAA-281), [MCAA-346](/MCAA/issues/MCAA-346)) owns the
+*serializer*. The engineer found that himself by re-reading the condition list
+against the code instead of waiting. Worth stating as a rule, because the conditions
+in this record are deliberately fine-grained and a coarse "blocked on the projection"
+reading strands the ones that are ready: **a blocker gates the conditions that name
+its module, not every condition on the same PR.** Conditions 10 part 3, 11 and 12 are
+genuinely blocked and are correctly still held.
