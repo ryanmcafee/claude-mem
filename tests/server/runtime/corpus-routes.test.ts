@@ -52,13 +52,21 @@ interface CorpusResponse {
       truncated: boolean;
       tokenEstimate: number;
       kindBreakdown: Record<string, number>;
+      earliestAtEpoch: number | null;
+      latestAtEpoch: number | null;
     };
     sources?: Array<{ id: string; content: string; position: number }>;
   };
 }
 
 interface ListResponse {
-  corpora: Array<{ id: string; name: string; shared: boolean; foreign: boolean }>;
+  corpora: Array<{
+    id: string;
+    name: string;
+    shared: boolean;
+    foreign: boolean;
+    stats: CorpusResponse['corpus']['stats'];
+  }>;
   scope: string;
 }
 
@@ -442,6 +450,74 @@ describe('MCAA-260 — remote corpus routes', () => {
     expect(byId.json.corpus).not.toHaveProperty('projectId');
     expect(JSON.stringify(byId.json)).not.toContain('agent-alpha-7');
     expect(JSON.stringify(byId.json)).not.toContain(projectAId);
+  });
+
+  it('serves a non-owner no statistic that spans a removed member', async () => {
+    const doomedId = await writeMemory(keyAPublisher, projectAId, 'shared knowledge: the step that gets retired', {
+      shared: true,
+      kind: 'runbook',
+    });
+    await writeMemory(keyAPublisher, projectAId, 'shared knowledge: the step that stays', {
+      shared: true,
+      kind: 'runbook',
+    });
+    const published = await request<CorpusResponse>('POST', corporaPath(projectAId), keyAPublisher, {
+      name: 'retirement',
+      shared: true,
+      filter: { scope: 'project' },
+    });
+    expect(published.status).toBe(201);
+    const corpusId = published.json.corpus.id;
+
+    const readById = (): Promise<{ status: number; json: CorpusResponse }> =>
+      request<CorpusResponse>('GET', `/v1/corpora/${corpusId}`, keyB);
+    const listShared = (): Promise<{ status: number; json: ListResponse }> =>
+      request<ListResponse>('GET', `${corporaPath(projectBId)}?scope=shared`, keyB);
+
+    const before = await readById();
+    expect(before.status).toBe(200);
+    expect(before.json.corpus.stats.observationCount).toBe(2);
+    const beforeList = await listShared();
+    expect(beforeList.json.corpora[0]!.stats.observationCount).toBe(2);
+
+    // The owner retires one member. Tenant B holds no claim on a row that is no
+    // longer a member, so nothing it can observe may still describe that row.
+    const deleted = await request('DELETE', `/v1/memories/${doomedId}`, keyAPublisher);
+    expect(deleted.status).toBe(200);
+
+    const after = await readById();
+    expect(after.json.corpus.stats.observationCount).toBe(1);
+    expect(after.json.corpus.stats.kindBreakdown).toEqual({ runbook: 1 });
+    // matchedCount and truncated would otherwise report the owner's selection:
+    // how many rows their filter reached, including the retired one.
+    expect(after.json.corpus.stats.matchedCount).toBe(1);
+    expect(after.json.corpus.stats.truncated).toBe(false);
+    expect(after.json.corpus.stats.tokenEstimate)
+      .toBeLessThan(before.json.corpus.stats.tokenEstimate);
+    // The date range collapses onto the one surviving member rather than still
+    // spanning the retired row's timestamp.
+    expect(after.json.corpus.stats.earliestAtEpoch).toBe(after.json.corpus.stats.latestAtEpoch);
+    expect(after.json.corpus.stats.earliestAtEpoch)
+      .toBeGreaterThanOrEqual(before.json.corpus.stats.earliestAtEpoch!);
+
+    // The whole point of condition 21: the only values that moved are the ones
+    // describing the membership tenant B can see now.
+    const changedFields = Object.keys(after.json.corpus)
+      .filter(field => JSON.stringify(after.json.corpus[field as keyof CorpusResponse['corpus']])
+        !== JSON.stringify(before.json.corpus[field as keyof CorpusResponse['corpus']]));
+    expect(changedFields.sort()).toEqual(['contentDigest', 'stats']);
+
+    const afterList = await listShared();
+    expect(afterList.json.corpora[0]!.stats.observationCount).toBe(1);
+    expect(afterList.json.corpora[0]!.stats.matchedCount).toBe(1);
+    expect(afterList.json.corpora[0]!.stats.latestAtEpoch)
+      .toBe(after.json.corpus.stats.latestAtEpoch);
+    expect(ListCorporaResponseSchema.safeParse(afterList.json).success).toBe(true);
+
+    // The owner is a different reader: their own numbers still report the
+    // selection their filter made, which is theirs to see.
+    const owner = await request<CorpusResponse>('GET', corporaPath(projectAId, '/retirement'), keyAPublisher);
+    expect(owner.json.corpus.stats.matchedCount).toBe(2);
   });
 
   it('never serves an owner-primed render to a foreign reader', async () => {
