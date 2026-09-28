@@ -27,10 +27,25 @@ export interface RecallBackend {
   // scoped to the caller's team. Throws if `projectId` is outside the key's scope.
   // `search` and `context` query identically; they are separate methods so the
   // route can audit each tool under its own mode (search vs context).
-  search(args: { projectId: string; query: string; limit: number }): Promise<unknown[]>;
-  context(args: { projectId: string; query: string; limit: number }): Promise<unknown[]>;
-  recent(args: { projectId: string; limit: number }): Promise<unknown[]>;
+  search(args: { projectId: string; query: string; limit: number; scope: RecallScope }): Promise<unknown[]>;
+  context(args: { projectId: string; query: string; limit: number; scope: RecallScope }): Promise<unknown[]>;
+  recent(args: { projectId: string; limit: number; scope: RecallScope }): Promise<unknown[]>;
 }
+
+/**
+ * `project` reads the caller's tenant only. `shared` additionally reads
+ * observations other tenants explicitly published as shared. Opt-in per call,
+ * so cross-tenant knowledge is reachable but never returned by accident.
+ */
+export type RecallScope = 'project' | 'shared';
+
+const SCOPE_PROPERTY = {
+  type: 'string',
+  enum: ['project', 'shared'],
+  description:
+    "Read scope. 'project' (default) returns only your own tenant's memory. "
+    + "'shared' also returns observations other tenants published as shared knowledge.",
+} as const;
 
 const SEARCH_LIMIT = { default: 20, max: 100 };
 const CONTEXT_LIMIT = { default: 10, max: 50 };
@@ -47,6 +62,7 @@ const TOOLS: Tool[] = [
         projectId: { type: 'string', description: 'Project to search within.' },
         query: { type: 'string', description: 'Search query.' },
         limit: { type: 'integer', minimum: 1, maximum: SEARCH_LIMIT.max },
+        scope: SCOPE_PROPERTY,
       },
       required: ['projectId', 'query'],
     },
@@ -61,6 +77,7 @@ const TOOLS: Tool[] = [
         projectId: { type: 'string', description: 'Project to search within.' },
         query: { type: 'string', description: 'Search query.' },
         limit: { type: 'integer', minimum: 1, maximum: CONTEXT_LIMIT.max },
+        scope: SCOPE_PROPERTY,
       },
       required: ['projectId', 'query'],
     },
@@ -73,6 +90,7 @@ const TOOLS: Tool[] = [
       properties: {
         projectId: { type: 'string', description: 'Project to list.' },
         limit: { type: 'integer', minimum: 1, maximum: RECENT_LIMIT.max },
+        scope: SCOPE_PROPERTY,
       },
       required: ['projectId'],
     },
@@ -82,6 +100,12 @@ const TOOLS: Tool[] = [
 function clampLimit(raw: unknown, spec: { default: number; max: number }): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return spec.default;
   return Math.min(Math.max(1, Math.trunc(raw)), spec.max);
+}
+
+// Anything other than the literal string 'shared' means the tenant-only scope.
+// An unrecognised or forged value can only ever narrow the read, never widen it.
+function parseScope(raw: unknown): RecallScope {
+  return raw === 'shared' ? 'shared' : 'project';
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -108,6 +132,7 @@ async function dispatchToolCall(
       projectId: requireString(args, 'projectId'),
       query: requireString(args, 'query'),
       limit: clampLimit(args.limit, SEARCH_LIMIT),
+      scope: parseScope(args.scope),
     });
     return jsonResult({ observations });
   }
@@ -116,6 +141,7 @@ async function dispatchToolCall(
       projectId: requireString(args, 'projectId'),
       query: requireString(args, 'query'),
       limit: clampLimit(args.limit, CONTEXT_LIMIT),
+      scope: parseScope(args.scope),
     });
     const context = observations
       .map((o) => (o as { content?: unknown }).content)
@@ -127,6 +153,7 @@ async function dispatchToolCall(
     const observations = await backend.recent({
       projectId: requireString(args, 'projectId'),
       limit: clampLimit(args.limit, RECENT_LIMIT),
+      scope: parseScope(args.scope),
     });
     return jsonResult({ observations });
   }

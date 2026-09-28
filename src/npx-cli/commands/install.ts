@@ -2443,6 +2443,8 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
             return `Worker starting on port ${port} — finishing in background ${styleText('yellow', '⏳')}`;
           case 'dead':
             return `Worker did not start — try \`npx claude-mem start\` manually ${styleText('yellow', '!')}`;
+          case 'remote':
+            return `Remote mode — memory goes to the configured server, no local worker ${styleText('green', 'OK')}`;
         }
       },
     },
