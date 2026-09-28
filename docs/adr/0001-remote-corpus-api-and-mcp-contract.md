@@ -7,7 +7,7 @@
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
   "Second review" below for what each one changed.
-- Second reviewer, revision 3: Security & Secrets Engineer -- MCAA-346, requested.
+- Second reviewer, revision 3: Security & Secrets Engineer -- MCAA-348, requested.
   D9 is a trust-boundary decision of the author's own and does not count as
   reviewed until that verdict lands.
 - Tracking: MCAA-259, parent MCAA-237. Revision 3 arises from the MCAA-345 review
