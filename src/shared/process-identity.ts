@@ -22,9 +22,10 @@ import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 // Windows lacks a cheap /proc-style start-time read and `ps lstart`, so we
 // shell to PowerShell's CIM (wmic is removed on Windows 11). The lookup is
 // ~100-300ms, so cache per-pid for 5s to avoid re-shelling when the same PID
-// is validated repeatedly within one spawn-decision window.
+// is validated repeatedly within one spawn-decision window. Successful reads
+// only — see captureWindowsStartToken for why a null is never cached.
 const WINDOWS_START_TOKEN_CACHE_TTL_MS = 5_000;
-const windowsStartTokenCache = new Map<number, { token: string | null; capturedAtMs: number }>();
+const windowsStartTokenCache = new Map<number, { token: string; capturedAtMs: number }>();
 
 /**
  * Count of RAW platform reads (cache misses and deliberate bypasses alike).
@@ -90,6 +91,18 @@ function captureWindowsStartToken(pid: number, bypassCache = false): string | nu
     token = null;
   }
 
+  // "Does not resolve" is the one answer that must never be remembered.
+  // Windows reissues a freed PID within milliseconds, so a cached null is
+  // served to the REPLACEMENT for up to 5s — and a null token makes
+  // isSameProcess return true unconditionally, disabling the reuse guard at
+  // the exact moment a reuse happened. Deleting rather than skipping the write
+  // also retires a token cached while the PID was alive, so the next read
+  // observes whoever owns the number now.
+  if (token === null) {
+    windowsStartTokenCache.delete(pid);
+    return null;
+  }
+
   windowsStartTokenCache.set(pid, { token, capturedAtMs: Date.now() });
   return token;
 }
@@ -141,21 +154,6 @@ function readStartToken(pid: number, bypassCache: boolean): string | null {
 }
 
 /**
- * True when `pid` still names the process that produced `snapshotToken`.
- *
- * Fallback semantics are deliberately asymmetric: refusing to kill must stay
- * strictly NARROWER than killing, or a token we simply could not read would
- * strand a live orphan and resurrect #2313. So only a token that was captured
- * successfully AND now differs proves reuse; an uncapturable token on either
- * side means "proceed".
- *
- * Windows caveat: captureProcessStartToken caches per-pid for 5s, so when the
- * snapshot and the revalidation fall inside one TTL this re-reads the cached
- * value and cannot detect reuse. It is therefore fully effective on POSIX
- * (/proc and ps are uncached) and best-effort on Windows — no worse than the
- * unchecked behavior it replaces.
- */
-/**
  * Cached identity read. Windows caches per-pid for 5s (a CIM query is
  * ~100-300ms); POSIX always reads fresh, so the cache is Windows-only.
  *
@@ -167,6 +165,19 @@ export function captureProcessStartToken(pid: number): string | null {
   return readStartToken(pid, false);
 }
 
+/**
+ * True when `pid` still names the process that produced `snapshotToken`.
+ *
+ * Fallback semantics are deliberately asymmetric: refusing to kill must stay
+ * strictly NARROWER than killing, or a token we simply could not read would
+ * strand a live orphan and resurrect #2313. So only a token that was captured
+ * successfully AND now differs proves reuse; an uncapturable token on either
+ * side means "proceed".
+ *
+ * Effective on Windows as well as POSIX: the revalidation below bypasses the
+ * 5s cache on every call, and captureWindowsStartToken never caches a null, so
+ * a freed PID cannot serve its predecessor's identity to the replacement.
+ */
 export function isSameProcess(pid: number, snapshotToken: string | null): boolean {
   if (snapshotToken === null) return true;
   // DELIBERATELY BYPASSES THE CACHE.
