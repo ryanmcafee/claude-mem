@@ -1,7 +1,7 @@
-# ADR 0001 -- Remote corpus (knowledge-base) API and MCP contract
+# ADR 0002 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 4 -- second review of D9 applied)
-- Date: 2026-09-28 (revisions 3-4; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 5 -- `sharedOrigin` reconciled with ADR 0001)
+- Date: 2026-09-28 (revisions 3-5; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
@@ -12,7 +12,10 @@
   the author's own, so it does not count as reviewed on his say-so.
 - Tracking: MCAA-259, parent MCAA-237. Revision 3 arises from the MCAA-345 review
   of MCAA-260's implementation, against MCAA-281's observation projection;
-  revision 4 from MCAA-348's review of revision 3.
+  revision 4 from MCAA-348's review of revision 3; revision 5 from a conflict this
+  ADR created with ADR 0001 (remote client mode and shared scope) over
+  `sharedOrigin` -- see "Revision 5" below. No second review is required: it
+  withdraws a requirement and adds no new boundary.
 - Machine-readable contract: [`src/server/contracts/corpus-v1.ts`](../../src/server/contracts/corpus-v1.ts)
 - Compatibility tests: [`tests/contracts/corpus-v1.test.ts`](../../tests/contracts/corpus-v1.test.ts)
 
@@ -614,7 +617,8 @@ The contract itself is versioned in code as `CORPUS_CONTRACT_VERSION = 1` in
 
 ### D9 -- Provenance is projected per member, at one shared boundary
 
-Added in revision 3; revised in revision 4 from the MCAA-348 second review. D3
+Added in revision 3; revised in revision 4 from the MCAA-348 second review, and in
+revision 5 to drop `sharedOrigin`. D3
 establishes *what content* may cross a tenant boundary; this decides *what else
 travels with it*, and where that decision lives.
 
@@ -624,9 +628,11 @@ member row**, against the reader, not per corpus:
 
 > A member row keeps full fidelity only when the reader owns it through their own
 > tenant predicate -- the row's own `team_id` **and** `project_id` both match the
-> authorized read. Every other row is reduced to published content plus
-> `sharedOrigin`. `team_id`, `project_id`, `metadata` and `serverSessionId` do not
-> cross that boundary, in a JSON response or in rendered artifact text.
+> authorized read. Every other row is reduced to published content alone: `id`,
+> `kind`, `content`, `shared`, the read-time `position`, and `createdAtEpoch`.
+> `team_id`, `project_id`, `metadata` and `serverSessionId` do not cross that
+> boundary, in a JSON response or in rendered artifact text, and neither does any
+> provenance token (revision 5; see `sharedOrigin` below).
 
 **The reader is an authorization result, not a request field.** Two definitions are
 in play in the reviewed implementation and they disagree: `loadMembers()` passes the
@@ -669,9 +675,11 @@ mistake that was actually made:
    branch merges second owns the convergence", which permits shipping a vulnerable
    surface in the interim. Revision 4 orders it instead: the projection module
    lands first, the corpus work rebases onto it, and the corpus surface is not
-   released until the cross-surface tests pass. `sharedOriginToken` is currently
-   module-private, so the import condition 12 asks for requires exporting it --
-   part of that same landing, not a separate negotiation.
+   released until the cross-surface tests pass. Revision 4 added that
+   `sharedOriginToken` must be exported so condition 12 could import it; revision 5
+   withdraws that, because MCAA-346 deletes the helper. The two symbols the corpus
+   path imports are `serializeObservationForViewer` and `isOwnerAuthorizedView`,
+   both already exported.
 4. **Selection is a channel too.** Projecting the response is not enough.
    `buildFilterClauses()` applies `metadataMatch` to foreign shared rows, so a
    caller can filter *other tenants'* rows on a metadata predicate they were never
@@ -683,36 +691,60 @@ mistake that was actually made:
    cannot disagree. `platformSource` gets the same treatment unless and until it
    is explicitly classified as published information.
 
-**`sharedOrigin`, and why it must land before v1 ships.** A projected member row
-carries `sharedOrigin`, a stable per-publisher grouping token: without it a reader
-cannot tell whether forty projected rows came from one publisher or forty, which is
-the grouping signal the observation surfaces already concede, and withholding it on
-the corpus surface while granting it on search is the same divergence as (3).
+**`sharedOrigin` is not in v1, on either surface.** Revisions 3-4 required this
+field and revision 4 specified how to build it. Revision 5 withdraws the
+requirement, because ADR 0001 (remote client mode and shared scope) had already
+decided the opposite for the observation surface and this ADR contradicted it
+twenty minutes later. That ADR's condition 1 is resolved *dropped*, its normative
+shared view is six fields, and the removal is tracked by MCAA-346. Two live records
+cannot give one field opposite fates; the drop is the one that stands.
 
-Revision 3 specified MCAA-281's construction -- a domain-separated SHA-256 over
-`team_id:project_id`, truncated to 16 hex characters. Revision 4 rejects that as
-the shipped form, on the second review's finding: 64 bits is ample against
-accidental collision but the input is not a secret. `project_id` is caller-supplied
-text, usually a repository or directory name, so once a reader knows or guesses a
-team the remaining search space is a wordlist, and a UUID in the input does not make
-a low-entropy sibling guessable-proof. A digest of guessable inputs is a pseudonym
-that can be confirmed, not a commitment.
+The drop is also correct on the merits, and revision 4's argument for keeping the
+field was a parity argument whose premise the drop removes. Revision 4 justified it
+as "the grouping signal the observation surfaces already concede", making a
+corpus-side omission a divergence. Search concedes no such signal any more. This is
+the same error as D3, one field later: a corpus decision resting on parity with an
+observation surface that was being narrowed at the same time. A parity argument does
+not hold a boundary when the surface it points at moves -- state the boundary
+directly instead.
 
-So the shipped token is a **persisted random 128-bit pseudonym per
-`(team_id, project_id)`**, minted on first use, stored, and shared by the
-observation and corpus surfaces. A keyed digest is an acceptable alternative only
-with an explicit key-custody and rotation design, which is a larger decision than
-this ADR should make in passing. Either way the token is pseudonymity with
+Directly, then: no consumer reads the token. The only references were the producer,
+an optional field on the client type, one README sentence, and the tests pinning it.
+It is also the last correlation channel on a projected row, on a projection whose
+whole purpose is to publish content *without* provenance -- a reader could otherwise
+cluster the shared corpus by publisher and take a census of how many distinct
+publishers exist. Linkability is provenance. Boring is a feature: the smaller
+surface at a trust boundary is the duller one. Dropping the field also retires the
+persisted minting state revision 4's pseudonym would have required, for a field
+nobody reads.
+
+**What re-adding costs, stated honestly.** MCAA-346 argues that adding a field later
+is "additive and free". That holds for the observation responses and does not hold
+here. Every response schema in `corpus-v1.ts` is `.strict()`, and condition 16
+requires a test that a projected source carrying a denied field *fails to parse*, so
+a consumer pinning v1 rejects a response carrying a key v1 does not list. Re-adding
+`sharedOrigin` after release is therefore a breaking change requiring
+`corpus-v2.ts`, not an additive one. Reversibility still points to omission, because
+the two directions are not symmetric: an absent field costs a version bump whenever
+someone wants it, while a shipped correlation channel costs a version bump to
+withdraw *and* has been disclosing linkability the entire time. Omit now; if
+grouping is ever needed it returns through an amendment that names its consumer, in
+`corpus-v2.ts`.
+
+If it does return, revision 4's construction stands as the form -- a persisted
+random 128-bit pseudonym per `(team_id, project_id)`, never a truncated digest of
+guessable inputs -- and the reason is sharper than revision 4 stated. Revision 4
+said the digest fails "once a reader knows or guesses a team", which invites the
+reply that `team_id` is an unguessable UUID. The case that matters needs no guessing
+at all: `isOwnerAuthorizedView()` deliberately projects a row from the reader's
+**own team** in a different project, and a reader knows its own `team_id` because
+the owner view returns it. The preimage is then the reader's own team id plus a
+project name -- usually a repository or directory -- so a wordlist confirms exactly
+which sibling project published the row. That is precisely the boundary D9 point 2
+exists to hold. A keyed construction is acceptable only with an explicit key-custody
+and rotation design. Whatever the form, such a token is pseudonymity with
 deliberate linkability -- never an authorization input, never a uniqueness
-guarantee, and never described as anonymous.
-
-It cannot be deferred. Every response schema in `corpus-v1.ts` is `.strict()`, so a
-consumer that pins the v1 schema **rejects** a response carrying a key the schema
-does not list. Under `.strict()`, adding a field is a breaking change for pinned
-consumers, not an additive one. The contract's "additive by default" default
-therefore does not apply to these schemas, and the full projected field set has to
-be right at v1 or wait for `corpus-v2.ts`. That argument settles *when* the field
-ships if it ships; it is not an argument that grouping is security-required.
+guarantee, never described as anonymous.
 
 **Optional is the wrong shape; two schemas is the right one.** Revision 3 accepted
 MCAA-260's `projectId`/`metadata` narrowed to `.optional()`. Revision 4 does not.
@@ -917,15 +949,17 @@ second review. All are gates on the **first release**, not deferred acceptance.
     vacuously and hand a non-owner the owner's cached prompt. Keep `prime`/`reprime`
     owner-only so the converse cannot happen either.
 12. **One implementation, projection first.** Import
-    `serializeObservationForViewer` / `isOwnerAuthorizedView` / the origin-token
-    helper from `src/server/routes/v1/observation-projection.ts`; export the token
-    helper, which is module-private today. Do not re-derive the rule in
+    `serializeObservationForViewer` and `isOwnerAuthorizedView` from
+    `src/server/routes/v1/observation-projection.ts`. Do not re-derive the rule in
     `CorpusService` or `corpus-render`, and do not ship a temporary second
     redaction. Where the corpus row shape differs (it adds `position`, has no
     `serverSessionId`), extend that module -- including its deliberately empty
     `SHARED_METADATA_ALLOWLIST` -- rather than forking it. Sequence: MCAA-281 lands,
-    MCAA-260 rebases onto it, cross-surface tests pass, then the corpus surface is
-    released.
+    MCAA-346 removes `sharedOriginToken` from that module, MCAA-260 rebases onto
+    the result, cross-surface tests pass, then the corpus surface is released.
+    Revision 4 also asked for the origin-token helper to be exported and imported;
+    revision 5 withdraws that, because condition 15 no longer wants the field and
+    MCAA-346 deletes the helper. Do not wait on or re-add it.
 13. **Omit `filter` and `filterDigest` on a non-owner read**, and drop `query`,
     `kinds` and `platformSource` from the render's system prompt on the same reads.
     `filter.metadataMatch` carries the exact metadata keys and values the member
@@ -941,13 +975,14 @@ second review. All are gates on the **first release**, not deferred acceptance.
     `observationCount` / bare membership answer the question the serializer
     refused. The test: changing only hidden metadata on a foreign row must not
     change any value a non-owner can observe.
-15. **`sharedOrigin` is a persisted random 128-bit pseudonym per
-    `(team_id, project_id)`**, minted once, stored, and shared by the observation and
-    corpus surfaces -- not a truncated digest of guessable inputs (D9 explains why
-    `project_id` is guessable and why a UUID in the input does not fix it). A keyed
-    construction is acceptable only with an explicit key-custody and rotation
-    design. Never an authorization input, never a uniqueness guarantee, never called
-    anonymous. Update the common helper and both contracts in the same change.
+15. **No `sharedOrigin`, and no other provenance token, on a projected row**
+    (revision 5, replacing revision 4's pseudonym requirement -- D9 explains why).
+    The projected member set is exactly `id`, `kind`, `content`, `shared`,
+    `position`, `createdAtEpoch`; assert it as an exact key set, so a future field
+    cannot appear silently. Nothing new is needed in `corpus-v1.ts`, which never
+    listed the field. Do not build the pseudonym store revision 4 asked for. If
+    grouping is ever wanted it arrives via an ADR amendment naming its consumer, in
+    `corpus-v2.ts` -- under `.strict()` it is a breaking addition, not a free one.
 16. **Owner and projected rows are two mutually exclusive schemas**, not one schema
     with optional sensitive fields, and the same for derived values: a non-owner
     `tokenEstimate` and the other statistics are recomputed from the projected
@@ -1016,9 +1051,9 @@ but not sufficient*. What changed in revision 4:
 | --- | --- |
 | Reader and denied set both incomplete -- `team_id` not denied; `PostgresCorpusMember` has no `teamId` to compare, so the rule was not evaluable; `loadMembers()` and the id routes hold two competing reader definitions; condition 11 vacuous on an empty member set | `team_id` added to the denied set; D9 gains "the reader is an authorization result" and "this is not computable today"; condition 10 rewritten in three parts; condition 11 covers empty sets |
 | Metadata inference survives a correct serializer -- `metadataMatch` filters foreign rows on unseen predicates and the answer reads out of counts; `filterDigest` is an unkeyed hash of low-entropy config, and never was a rebuild signal | New D9 point 4 and new condition 14 (selection and counting follow the response rule); condition 13 now omits `filterDigest` too, with revision 3's "it is opaque" retracted |
-| `sharedOrigin` treats a UUID as a secret; 64-bit truncated digest over guessable `project_id` | D9 replaces the construction with a persisted random 128-bit per-`(team, project)` pseudonym; new condition 15 |
+| `sharedOrigin` treats a UUID as a secret; 64-bit truncated digest over guessable `project_id` | D9 replaces the construction with a persisted random 128-bit per-`(team, project)` pseudonym; new condition 15. **Superseded by revision 5:** the field is dropped entirely, so no construction ships. |
 | Derived values carry unprojected input -- `tokenEstimate` reuses a build-time render that included private metadata | D9 gains "derived values are projected too"; folded into condition 16, with the `id`-as-citation and timestamp-correlation disclosures stated explicitly instead of resting on parity with search |
-| `sharedOriginToken` is module-private so condition 12's import is impossible; "whichever merges second" permits an interim vulnerable surface; optional sensitive fields cannot fail closed | Condition 12 orders the landing (MCAA-281 first, corpus rebases, then release) and requires the export; condition 16 replaces optional fields with two mutually exclusive schemas and a test that a projected row carrying a denied field fails to parse |
+| `sharedOriginToken` is module-private so condition 12's import is impossible; "whichever merges second" permits an interim vulnerable surface; optional sensitive fields cannot fail closed | Condition 12 orders the landing (MCAA-281 first, corpus rebases, then release) and requires the export; condition 16 replaces optional fields with two mutually exclusive schemas and a test that a projected row carrying a denied field fails to parse. **Superseded in part by revision 5:** the export requirement is withdrawn with the field; the landing order stands, with MCAA-346 inserted. |
 
 The blast-radius claim "publisher identity, not content" was rejected as too kind
 and is rewritten: `metadata` is free-form publisher JSON of unknown sensitivity, so
@@ -1027,3 +1062,40 @@ to keep `CORPUS_CONTRACT_VERSION = 1` was accepted as consistent with D8 while t
 contract is genuinely unreleased, conditional on every prerelease consumer being
 updated before first release. No deployed exposure was established by either
 review; both are source-level.
+
+## Revision 5 -- reconciling `sharedOrigin` with ADR 0001
+
+Not a review finding. A contradiction between two records, both mine, on the same
+day:
+
+| Record | Says about `sharedOrigin` |
+| --- | --- |
+| ADR 0001, remote client mode and shared scope, condition 1 (PR #6) | Resolved *dropped*. No consumer, last correlation channel on a projected row. Normative shared view is six fields. Removal is MCAA-346. |
+| This ADR, revisions 3-4, D9 and condition 15 (PR #4) | Required, and "cannot be deferred"; revision 4 specified a persisted random 128-bit pseudonym. |
+
+Both were unmerged and both were live instructions to the same implementing
+engineer, who owns MCAA-346 (delete the field) and MCAA-260 (import the helper that
+produces it). Revision 5 resolves it in favour of the drop, on the reasoning in D9
+above, and corrects MCAA-346's "additive and free" in the same place: under
+`.strict()` schemas, re-adding the field later is breaking, so the omission is
+deliberate and permanent until an amendment names a consumer.
+
+Three process notes, because the mechanism matters more than this field:
+
+1. **The cause was a parity argument.** D3 was retracted in revision 3 for resting
+   on "the same rows a shared search would return" while MCAA-281 was narrowing
+   exactly that. Condition 15 then rested on "the grouping signal the observation
+   surfaces already concede" while MCAA-346 was removing exactly that. The same
+   error twice in one ADR is a pattern, not an accident: **a cross-surface claim
+   about a surface under concurrent change is not a justification.** State the
+   boundary this ADR wants, and cite the other surface only for divergence, never
+   for permission.
+2. **Conditions on another surface's code need that surface's owner.** Revision 4's
+   condition 15 required a change inside MCAA-281's module and condition 12 required
+   an export from it. Neither was carried to an issue owned by whoever lands that
+   module. Cross-record conditions get an issue or they are not conditions.
+3. **Numbering.** This ADR and the remote-client-mode ADR were both authored as
+   `0001` on separate unmerged branches, so merging both would land two `0001`
+   records. Renumbered here to `0002`; the client-mode ADR keeps `0001` as the
+   earlier decision. The index links it before PR #6 merges, so that row is dead
+   until then.
