@@ -22,6 +22,11 @@ Conventions:
   reader to verify a figure their tool reports differently, which reads as a discrepancy and is not
   one. Titles are what the `dropped-test guard (gated suites)` job compares, so they are also what
   the machine will hold you to.
+- This index carries the title and the status, never a revision number and never the state of a
+  branch that has not merged. A revision belongs in its own record's header, and a branch state is
+  true for hours: an index row that pins either is wrong at the next amendment or the next push,
+  three unmerged branches can each create this file with a different answer, and nothing reads prose
+  for drift. Write only what stays true whichever of them merges first.
 
 | ADR | Title | Status |
 | --- | --- | --- |
@@ -30,7 +35,7 @@ Conventions:
 | [0003](./0003-client-supplied-idempotency-key-on-v1-memories.md) | A client-supplied idempotency key on `POST /v1/memories` | accepted |
 
 Each record reaches `main` with its own pull request, so a link above can be dead in a branch that
-does not yet carry that record. ADR 0002 was authored as `0001` on an unmerged branch and
-renumbered; MCAA-260's branch (PR #7) still carries a stale revision-2 copy at
-`0001-remote-corpus-api-and-mcp-contract.md`, which it deletes before merge (ADR 0002, condition 19).
-Citations of `0001-remote-corpus-api-and-mcp-contract.md` mean ADR 0002.
+does not yet carry that record, and two unmerged branches can hold different revisions of the same
+record until both have landed. ADR 0002 was authored as `0001` on an unmerged branch and renumbered;
+that duplicate was deleted at `e2c3bc38`, so only one file claims each number and ADR 0002's
+condition 19 is satisfied. Citations of `0001-remote-corpus-api-and-mcp-contract.md` mean ADR 0002.
