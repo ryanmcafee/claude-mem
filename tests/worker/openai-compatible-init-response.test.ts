@@ -4,6 +4,7 @@ import { OpenAICompatibleProvider, type ProviderQueryResult } from '../../src/se
 import type { DatabaseManager } from '../../src/services/worker/DatabaseManager.js';
 import type { SessionManager } from '../../src/services/worker/SessionManager.js';
 import type { ActiveSession, ConversationMessage } from '../../src/services/worker-types.js';
+import { makeActiveSession } from '../helpers/active-session.js';
 
 const mockMode = {
   name: 'code',
@@ -29,28 +30,7 @@ const observationXml = `
 `;
 
 function makeSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
-  return {
-    sessionDbId: 1,
-    contentSessionId: 'test-session',
-    memorySessionId: 'mem-session-123',
-    project: 'test-project',
-    platformSource: 'claude',
-    userPrompt: 'test prompt',
-    abortController: new AbortController(),
-    generatorPromise: null,
-    lastPromptNumber: 1,
-    startTime: Date.now(),
-    cumulativeInputTokens: 0,
-    cumulativeOutputTokens: 0,
-    earliestPendingTimestamp: null,
-    claimedMessageIds: [],
-    conversationHistory: [],
-    currentProvider: null,
-    consecutiveRestarts: 0,
-    consecutiveInvalidOutputs: 0,
-    lastGeneratorActivity: Date.now(),
-    ...overrides,
-  };
+  return makeActiveSession(overrides);
 }
 
 /** Answers every prompt — the init prompt included — with a valid observation. */

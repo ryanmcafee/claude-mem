@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test';
 import type { ActiveSession } from '../../src/services/worker-types.js';
+import { makeActiveSession } from '../helpers/active-session.js';
 
 // bun's mock.module is process-global and sticky: it is never auto-unregistered
 // and leaks into every file that runs afterwards. Snapshot each real module
@@ -106,27 +107,16 @@ function resultFrame(overrides: Record<string, unknown> = {}) {
 }
 
 function createSession(): ActiveSession {
-  return {
+  return makeActiveSession({
     sessionDbId: 3492,
     contentSessionId: 'content-3492',
     memorySessionId: null,
     project: 'observer-project',
-    platformSource: 'claude',
     userPrompt: 'run the project',
-    abortController: new AbortController(),
-    generatorPromise: null,
     lastPromptNumber: 2,
-    startTime: Date.now(),
-    cumulativeInputTokens: 0,
-    cumulativeOutputTokens: 0,
     earliestPendingTimestamp: QUEUED_TIMESTAMP,
     claimedMessageIds: [1],
-    conversationHistory: [],
-    currentProvider: null,
-    consecutiveRestarts: 0,
-    consecutiveInvalidOutputs: 0,
-    lastGeneratorActivity: Date.now(),
-  } as ActiveSession;
+  });
 }
 
 function createHarness(session: ActiveSession) {

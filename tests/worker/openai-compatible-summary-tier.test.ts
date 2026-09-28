@@ -3,6 +3,7 @@ import { ModeManager } from '../../src/services/domain/ModeManager.js';
 import { OpenAICompatibleProvider, type ProviderQueryResult } from '../../src/services/worker/OpenAICompatibleProvider.js';
 import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
 import type { ActiveSession, ConversationMessage } from '../../src/services/worker-types.js';
+import { makeActiveSession } from '../helpers/active-session.js';
 
 const mockMode = {
   name: 'code',
@@ -16,28 +17,7 @@ const mockMode = {
 };
 
 function makeSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
-  return {
-    sessionDbId: 1,
-    contentSessionId: 'test-session',
-    memorySessionId: 'mem-session-123',
-    project: 'test-project',
-    platformSource: 'claude',
-    userPrompt: 'test prompt',
-    abortController: new AbortController(),
-    generatorPromise: null,
-    lastPromptNumber: 1,
-    startTime: Date.now(),
-    cumulativeInputTokens: 0,
-    cumulativeOutputTokens: 0,
-    earliestPendingTimestamp: null,
-    claimedMessageIds: [],
-    conversationHistory: [],
-    currentProvider: null,
-    consecutiveRestarts: 0,
-    consecutiveInvalidOutputs: 0,
-    lastGeneratorActivity: Date.now(),
-    ...overrides,
-  };
+  return makeActiveSession(overrides);
 }
 
 class TestProvider extends OpenAICompatibleProvider<{ apiKey: string; model: string }> {
