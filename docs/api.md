@@ -15,7 +15,7 @@ Available beta endpoints:
 - `POST /v1/events`
 - `POST /v1/events/batch`
 - `GET /v1/events/:id`
-- `POST /v1/memories`
+- `POST /v1/memories` (optional `idempotencyKey` — see [Idempotent memory writes](#idempotent-memory-writes-post-v1memories))
 - `GET /v1/memories/:id`
 - `PATCH /v1/memories/:id`
 - `POST /v1/search`
@@ -90,6 +90,47 @@ always populated (or `null` only when generation was explicitly disabled).
 The actual provider call happens in a separate BullMQ worker process
 (`claude-mem server worker start`); the HTTP path never blocks on a
 provider response.
+
+## Idempotent memory writes (`POST /v1/memories`)
+
+`POST /v1/memories` accepts an optional `idempotencyKey` (1..512 characters after
+trimming; a whitespace-only value is a `400`). It exists so a re-run of an import
+or a retry after a network failure cannot duplicate rows. The contract is
+[ADR 0003](adr/0003-client-supplied-idempotency-key-on-v1-memories.md).
+
+| Request | Response |
+| --- | --- |
+| No `idempotencyKey` | `201` and a new row on every call — unchanged behavior |
+| Key new for this `(team, project)` | `201` with `{ memory, created: true }` |
+| Key already present | `200` with `{ memory, created: false }`, nothing modified |
+
+Guarantees:
+
+- **Read `created`, not the status code.** Any `2xx` is success. A client that
+  tests `status === 201` reports every replay as a failure. `created` is optional
+  on the response type so a new client against an older server sees `undefined`
+  rather than a wrong `false`; treat `undefined` as "unknown, assume written".
+- **First write wins.** The key identifies the row, not the request. Content is
+  never compared and never updated — a replay carrying different content returns
+  the originally stored row, with `updated_at` preserved. Use
+  `PATCH /v1/memories/:id` to change stored content.
+- **No expiry.** The key is durable for the lifetime of the row. There is no
+  retention window after which it is forgotten and a re-import would duplicate.
+- **Tenant-scoped.** Keys are unique per `(team, project)`. Two tenants, or one
+  tenant's two projects, may use identical keys without interacting.
+- **Delivery.** At-least-once delivery with exactly-once effect per
+  `(team, project, idempotencyKey)`. Without a key, at-least-once with no dedup.
+  No ordering is offered; concurrent writes of one key resolve to a single row and
+  the loser observes `created: false`.
+- **Audited.** An insert emits `memory.write`; a replay emits
+  `memory.write.duplicate` against the existing observation id.
+
+**This is not an HTTP `Idempotency-Key`.** Despite the familiar name, it
+deliberately differs from the Stripe/IETF header in two ways: there is **no
+request fingerprinting** (the same key with a different body is accepted and
+ignored, not rejected with a conflict), and there is **no retention window** (the
+key never expires, and the replay returns the current stored row rather than a
+recording of the original response).
 
 ## Remote MCP endpoint
 

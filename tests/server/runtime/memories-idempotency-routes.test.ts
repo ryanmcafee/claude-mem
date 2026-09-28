@@ -216,6 +216,54 @@ describe('MCAA-241 — idempotent writes on POST /v1/memories', () => {
     expect(await countObservations()).toBe(2);
   });
 
+  // ADR 0003 C1 — the route owns trimming, so a whitespace-only key is rejected
+  // instead of collapsing into the bare `client:v1:` prefix that every other
+  // whitespace-only key would also produce.
+  it('rejects a whitespace-only idempotency key instead of coercing it', async () => {
+    const attempt = await post<MemoryResponse>('/v1/memories', key, {
+      projectId, content: 'should never be stored', idempotencyKey: '   ',
+    });
+    expect(attempt.status).toBe(400);
+    expect(await countObservations()).toBe(0);
+  });
+
+  it('normalizes a padded key once, at the route boundary', async () => {
+    const first = await post<MemoryResponse>('/v1/memories', key, {
+      projectId, content: 'the original body', idempotencyKey: '  padded-key  ',
+    });
+    expect(first.status).toBe(201);
+    const stored = await pool.query<{ generation_key: string }>('SELECT generation_key FROM observations');
+    expect(stored.rows[0]?.generation_key).toBe('client:v1:padded-key');
+
+    const replay = await post<MemoryResponse>('/v1/memories', key, {
+      projectId, content: 'a rewritten body', idempotencyKey: 'padded-key',
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.json.created).toBe(false);
+    expect(await countObservations()).toBe(1);
+  });
+
+  // ADR 0003 C4 — a replay wrote nothing, so `memory.write` would make the log
+  // lie; but silence is indistinguishable from a dropped audit write, so the
+  // no-op gets its own action and key probing stays visible.
+  it('audits the replay as memory.write.duplicate and not as a write', async () => {
+    const body = {
+      projectId, content: 'imported once', idempotencyKey: 'import:sqlite-v1:observations:audited',
+    };
+    const first = await post<MemoryResponse>('/v1/memories', key, body);
+    expect(first.status).toBe(201);
+    await post<MemoryResponse>('/v1/memories', key, body);
+
+    const audit = await pool.query<{ action: string; resource_type: string; resource_id: string }>(
+      `SELECT action, resource_type, resource_id FROM audit_log
+        WHERE action IN ('memory.write', 'memory.write.duplicate')
+        ORDER BY created_at ASC`,
+    );
+    expect(audit.rows.map((row) => row.action)).toEqual(['memory.write', 'memory.write.duplicate']);
+    expect(audit.rows[1]?.resource_id).toBe(first.json.memory.id);
+    expect(audit.rows[1]?.resource_type).toBe('observation');
+  });
+
   it('cannot alias an observation the generation pipeline wrote', async () => {
     const generated = await new PostgresObservationRepository(pool).create({
       projectId,
