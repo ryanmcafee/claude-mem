@@ -10,4 +10,4 @@ supersedes the old one; do not rewrite history in place.
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| [0001](./0001-remote-corpus-api-and-mcp-contract.md) | Remote corpus (knowledge-base) API and MCP contract | Accepted, pending second review |
+| [0001](./0001-remote-corpus-api-and-mcp-contract.md) | Remote corpus (knowledge-base) API and MCP contract | Accepted (rev 3); rev 3's D9 pending second review |
