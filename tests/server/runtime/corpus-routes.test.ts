@@ -677,6 +677,95 @@ describe('MCAA-260 — remote corpus routes', () => {
     expect(memoryStillThere.json.observations.map(observation => observation.id)).toEqual([memoryId]);
   });
 
+  // Condition 14. `scope: 'shared'` admits other tenants' rows, so filtering on a
+  // field those rows never disclose turns the member count into a read of it. The
+  // path needs no shared-write grant: tenant B builds an ordinary private corpus
+  // in its own project and the foreign rows arrive as members.
+  it('refuses to select foreign shared rows on a metadata predicate the caller cannot see', async () => {
+    await writeMemory(keyAPublisher, projectAId, 'argocd syncs from apps/', {
+      shared: true,
+      metadata: { incidentId: 'INC-4471' },
+    });
+
+    const rejected = await request<ErrorResponse>('POST', corporaPath(projectBId), keyB, {
+      name: 'oracle-probe',
+      filter: { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.json.error).toBe('ValidationError');
+    expect(rejected.json.message).toContain('metadataMatch');
+
+    // Refused before anything was written: no corpus row, so counting never ran
+    // either. Selection and counting follow the identical rule by not running.
+    const listed = await request<ListResponse>('GET', corporaPath(projectBId), keyB);
+    expect(listed.json.corpora.map(corpus => corpus.name)).not.toContain('oracle-probe');
+  });
+
+  it('refuses platformSource on a shared-scope build for the same reason', async () => {
+    const rejected = await request<ErrorResponse>('POST', corporaPath(projectBId), keyB, {
+      name: 'platform-probe',
+      filter: { scope: 'shared', platformSource: 'cursor' },
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.json.error).toBe('ValidationError');
+    expect(rejected.json.message).toContain('platformSource');
+  });
+
+  // The gate is on the combination, not on either field: both stay usable against
+  // the caller's own rows, which is the only place they were ever meaningful.
+  it('still filters the caller\'s own observations on metadata and platform source', async () => {
+    await writeMemory(keyA, projectAId, 'rollback runbook step one', { metadata: { incidentId: 'INC-1' } });
+    await writeMemory(keyA, projectAId, 'unrelated note', { metadata: { incidentId: 'INC-2' } });
+
+    const built = await request<CorpusResponse>('POST', corporaPath(projectAId), keyA, {
+      name: 'own-metadata',
+      filter: { scope: 'project', metadataMatch: { incidentId: 'INC-1' } },
+    });
+    expect(built.status).toBe(201);
+    expect(built.json.corpus.stats.observationCount).toBe(1);
+    expect(CorpusDetailSchema.safeParse(built.json.corpus).success).toBe(true);
+
+    const emptyPlatform = await request<CorpusResponse>('POST', corporaPath(projectAId), keyA, {
+      name: 'own-platform',
+      filter: { scope: 'project', platformSource: 'cursor' },
+    });
+    expect(emptyPlatform.status).toBe(201);
+  });
+
+  // An empty metadataMatch and a null platformSource emit no SQL clause, so they
+  // test nothing and must not be rejected -- the gate and the SQL agree on which
+  // filters are real.
+  it('accepts a shared-scope filter whose owner-only fields select nothing', async () => {
+    const built = await request<CorpusResponse>('POST', corporaPath(projectBId), keyB, {
+      name: 'vacuous-owner-only',
+      filter: { scope: 'shared', metadataMatch: {}, platformSource: null },
+    });
+    expect(built.status).toBe(201);
+  });
+
+  // A filter stored before the gate existed must not keep working through the
+  // rebuild path, which reuses it verbatim.
+  it('applies the same rule to a rebuild of a stored shared-scope filter', async () => {
+    await writeMemory(keyA, projectAId, 'metadata-filtered member', { metadata: { incidentId: 'INC-9' } });
+    const built = await request<CorpusResponse>('POST', corporaPath(projectAId), keyA, {
+      name: 'widened-later',
+      filter: { scope: 'project', metadataMatch: { incidentId: 'INC-9' } },
+    });
+    expect(built.status).toBe(201);
+
+    // Widen the stored filter to 'shared' behind the route, exactly as a row
+    // written before this gate would look.
+    await client.query(
+      `UPDATE corpora SET filter = jsonb_set(filter, '{scope}', '"shared"'), member_scope = 'shared'
+       WHERE id = $1`,
+      [built.json.corpus.id],
+    );
+
+    const rebuilt = await request<ErrorResponse>('POST', `${corporaPath(projectAId)}/widened-later/rebuild`, keyA);
+    expect(rebuilt.status).toBe(400);
+    expect(rebuilt.json.error).toBe('ValidationError');
+  });
+
   it('rejects anonymous and unknown keys on every corpus route', async () => {
     const anonymous = await fetch(`http://127.0.0.1:${port}${corporaPath(projectAId)}`);
     expect(anonymous.status).toBe(401);
