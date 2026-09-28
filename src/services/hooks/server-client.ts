@@ -147,9 +147,17 @@ export interface ServerAddObservationRequest {
    * silently writing team-private.
    */
   shared?: boolean;
+  /**
+   * Dedup key, unique per team + project (MCAA-241). Sending the same key twice
+   * returns the stored row with `created: false` instead of adding a second one,
+   * which is how the SQLite import stays re-runnable.
+   */
+  idempotencyKey?: string;
 }
 
 export interface ServerAddObservationResponse {
+  /** False when the server already held a row for this `idempotencyKey`. */
+  created?: boolean;
   memory: {
     id: string;
     projectId: string;
@@ -343,6 +351,7 @@ export class ServerClient {
       // project/tenant/agent triple without a schema change on every route.
       ...(buildWriteMetadata(input) ?? {}),
       ...(input.shared !== undefined ? { shared: input.shared } : {}),
+      ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
     };
   }
 
