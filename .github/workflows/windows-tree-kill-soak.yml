@@ -102,10 +102,11 @@ jobs:
       # record what is still alive before the runner's orphan sweep reaps it.
       #
       # This is NOT empty on a healthy draw. Measured across 20 green draws in
-      # run 36434109032, every draw leaves two orphaned `ping -n 120` trees --
-      # one of them by design, since `discovers descendants through the
-      # production enumeration` kills only the root. Read this against that
-      # baseline of two, not against zero.
+      # run 36434109032, every draw leaves exactly two orphaned `ping -n 120`
+      # trees, both accounted for: `discovers descendants through the production
+      # enumeration` kills only the root, and `is a complete no-op when the root
+      # identity does not match` cleans up `descendants[0]`, which is the
+      # conhost rather than the ping. Read this against a baseline of two.
       - name: Surviving processes
         if: always()
         shell: pwsh
