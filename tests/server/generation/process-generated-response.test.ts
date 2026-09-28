@@ -589,7 +589,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
         id: jobId, projectId, teamId, status: 'processing',
       });
       const outcome = await processGeneratedResponse({
-        pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+        pool,
         job: (await reloadJob())!,
         rawText: SHARED_LOOKING_XML,
         providerLabel: 'fake',
@@ -630,7 +630,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       });
 
       const outcome = await processSessionSummaryResponse({
-        pool: pool as unknown as Parameters<typeof processSessionSummaryResponse>[0]['pool'],
+        pool,
         job: (await storage.observationGenerationJobs.getByIdForScope({
           id: summaryJob.id, projectId, teamId,
         }))!,

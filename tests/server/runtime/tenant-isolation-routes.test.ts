@@ -572,6 +572,8 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       expect(ownerRead.json.observations[0]!.metadata).toMatchObject(PUBLISHER_METADATA);
     });
 
+    // Negative control: this passes with or without the projection, by design.
+    // It guards against over-redaction, not against the leak.
     it('keeps the owner\'s own shared row at full fidelity', async () => {
       const sharedId = await publishRunbook();
       const ownerRead = await post<SearchResponse>('/v1/search', keyA, {
@@ -609,6 +611,41 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
         expect(result.observations).toEqual([]);
         expect(result.raw).not.toContain(PROJECT_A_ID);
       }
+
+      // The one value that DOES widen still hands back a projected row, so the
+      // assertions above are about narrowing rather than about an empty result set.
+      const widened = await callMcpTool(keyB, 'search', {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+      });
+      expectTenantAProvenanceRedacted(widened.raw, widened.observations);
+    });
+
+    it('does not turn a forged projectId into ownership of a shared row', async () => {
+      // The projection's owner test uses the queried projectId, and a team-scoped
+      // key may name any project. Naming the publisher's project must not promote
+      // the caller to the owner view — the team comparison is what stops it.
+      await publishRunbook();
+      const forged = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: PROJECT_A_ID,
+        query: 'intermediate CA',
+        scope: 'shared',
+        teamId: teamAId,
+        serverSessionId: 'forged',
+        shared: true,
+      });
+      expect(forged.status).toBe(200);
+      // The row is reachable (it is published), but only as a projected row.
+      expect(forged.json.observations).toHaveLength(1);
+      for (const observation of forged.json.observations) {
+        expect(observation.projectId).toBeUndefined();
+        expect(observation.teamId).toBeUndefined();
+        expect(observation.serverSessionId).toBeUndefined();
+        expect(observation.metadata).toBeUndefined();
+      }
+      expect(JSON.stringify(forged.json)).not.toContain(PUBLISHER_AGENT_ID);
+      expect(JSON.stringify(forged.json)).not.toContain(NESTED_MARKER);
     });
 
     it('does not widen a REST read through forged identity fields in the body', async () => {
@@ -622,6 +659,16 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       });
       expect(forged.status).toBe(200);
       expect(forged.json.observations).toEqual([]);
+
+      // Same request with the real opt-in: reachable, and still projected.
+      const optedIn = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+        teamId: teamAId,
+        shared: true,
+      });
+      expectTenantAProvenanceRedacted(JSON.stringify(optedIn.json), optedIn.json.observations);
     });
 
     it('records the shared flag on the publish audit entry', async () => {
