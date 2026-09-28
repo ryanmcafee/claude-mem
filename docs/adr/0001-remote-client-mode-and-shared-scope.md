@@ -434,6 +434,10 @@ migration path. The conditions below exist because deciding now is free and deci
   the response body, on REST search/context or on any of the three MCP tools. A same-team row
   published outside the queried project gets the same projection, and the same row read from its own
   project still returns the owner view, which pins the boundary from both sides.
+  PR #12 rewrites this file's harness as well, but unlike the generation suite below that merge needs
+  no resolution choice: verified 2026-09-28, the PR #8 / PR #12 auto-merge carries all 21 titles with
+  zero removed from either side, and keeps PR #12's `createIsolatedSchema` harness with no
+  `pool.on('connect')` listener left behind.
 - `tests/server/routes/observation-projection.test.ts` -- the projection's own rules. It must assert
   the surviving key set as an **exact set**, not as a list of absences, so a field added to the
   shared view later cannot pass silently. (PR #8 asserts the set that still includes `sharedOrigin`,
@@ -479,12 +483,29 @@ migration path. The conditions below exist because deciding now is free and deci
   multiplicities rather than a set, so one of two same-titled tests disappearing still fails.
 
   Stated limits, so nobody reads the guard as wider than it is. `it.each`/`test.each` titles are
-  computed at runtime and invisible to a source scan, so the inventory is a floor. A rename reads as
-  a removal plus an addition and fires; the escape hatch is a `Removed-test: "<exact title>" <why>`
-  commit trailer or the `tests-removed` PR label, deliberately requiring a stated reason, because a
-  gate people learn to click past is worse than no gate. And it catches a deleted assertion, not a
-  relocated one: a guard re-applied to the wrong function removes no title and stays green
-  (MCAA-394). This guard and the `docs/adr/README.md` conventions are the same rule at two
-  altitudes -- the record
-  says which assertions the decision owns, the guard refuses to let one disappear -- and neither
-  substitutes for the other.
+  computed at runtime and invisible to a source scan, so the inventory is a floor. It catches a
+  deleted assertion, not a relocated one: a guard re-applied to the wrong function removes no title
+  and stays green (MCAA-394). And a rename reads as a removal plus an addition, so a deliberate one
+  has to be declared.
+
+  **The two ways to declare a removal are not equivalent, and only one of them may be used on the
+  two titles named above.** `check-test-name-removals.ts` computes
+  `const waived = labelled || isWaived(removal.title, waivers)`. A
+  `Removed-test: "<exact title>" <why>` commit trailer waives that one title and names it; the
+  `tests-removed` pull-request label is a single boolean that waives **every** removal in **every**
+  gated suite in that pull request and names none of them. So a pull request that legitimately
+  renames one test and accidentally drops these two is green under the label, with nothing in the
+  build output for a reviewer to read. For this decision the label is not an acceptable
+  declaration: a removal of either named title is declared by trailer, or it is not declared.
+  Verified 2026-09-28 against PR #18 at `b8e60371`.
+
+  For the conflict this section warns about, the correct resolution declares **nothing**, because it
+  removes nothing. Measured with `scripts/test-names.ts`: PR #11 and PR #8 each remove zero titles
+  from this suite relative to `main` (14 and 16 titles against `main`'s 14), and only the
+  take-one-side-wholesale resolution removes any -- exactly the two named above. A red
+  `dropped-test guard` on that rebase therefore means the resolution is wrong, not that a waiver is
+  missing.
+
+  This guard and the `docs/adr/README.md` conventions are the same rule at two altitudes -- the
+  record says which assertions the decision owns, the guard refuses to let one disappear -- and
+  neither substitutes for the other.
