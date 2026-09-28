@@ -1,7 +1,8 @@
 # ADR 0002 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 5 -- `sharedOrigin` reconciled with ADR 0001)
-- Date: 2026-09-28 (revisions 3-5; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 7 -- conditions re-read against the implementation at
+  `3b8f002f`; they bind on merging PR #7, per revision 6)
+- Date: 2026-09-28 (revisions 3-7; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
@@ -15,8 +16,28 @@
   revision 4 from MCAA-348's review of revision 3; revision 5 from a conflict this
   ADR created with ADR 0001 (remote client mode and shared scope) over
   `sharedOrigin` -- see "Revision 5" below. No second review is required: it
-  withdraws a requirement and adds no new boundary.
+  withdraws a requirement and adds no new boundary. Revision 6 moves conditions 10-17
+  from a first-release gate to a merge gate on PR #7, on the reachability the Workflow
+  & Eventing Engineer established. Revision 7 comes from MCAA-354 and changes no
+  decision: it re-reads conditions 10-16 against the code, adds conditions 18-19 for
+  what that re-read found, corrects one remaining blast-radius sentence, and pins the
+  numbering below. No further second review is required for revision 7: it moves no
+  boundary and loosens nothing. Condition 18 makes the contract express a requirement
+  conditions 13 and 16 already imposed, and condition 19 is numbering hygiene.
+- **Numbering, canonical.** This record is ADR **0002**. ADR **0001** is
+  "Remote client mode, tenant binding and opt-in shared scope" (PR #6). MCAA-348's
+  review cites this document as `0001-remote-corpus-api-and-mcp-contract.md` and
+  MCAA-346 cites ADR 0001 as `0001-remote-client-mode-and-shared-scope.md`: both
+  citations predate the renumbering in revision 5, and **only the second one still
+  resolves**. Two open PRs carry this document at two paths -- PR #4 at
+  `docs/adr/0002-...` (this file, revision 7) and PR #7 at
+  `docs/adr/0001-remote-corpus-api-and-mcp-contract.md` (a stale revision-2 copy,
+  plus an index row mapping 0001 to the corpus ADR). Merging both would land two
+  files numbered 0001 and two copies of this decision at different revisions.
+  Condition 19 resolves it: PR #7 deletes its copy and its index row.
 - Machine-readable contract: [`src/server/contracts/corpus-v1.ts`](../../src/server/contracts/corpus-v1.ts)
+  (this branch carries the pre-condition-16 shape; the two mutually exclusive
+  member schemas land on MCAA-260's branch at `3b8f002f`)
 - Compatibility tests: [`tests/contracts/corpus-v1.test.ts`](../../tests/contracts/corpus-v1.test.ts)
 
 ## Context
@@ -326,7 +347,7 @@ and the recall tools now project any row reached through the shared branch down 
 content plus an opaque origin token. The "same rows a shared search would return"
 equivalence therefore no longer licenses returning the stored row -- it licenses
 returning the *projection* of it. Any corpus surface that returns more is a way
-around that projection. D9 states the rule; conditions 10-13 are what enforce it.
+around that projection. D9 states the rule; conditions 10-19 are what enforce it.
 
 Worth recording why the build-time invariant is currently airtight: there is **no
 `UPDATE observations` statement anywhere in the repository.** Observations are
@@ -645,10 +666,15 @@ both the corpus-authorization check and the member projection, which stay separa
 decisions: being allowed to open a corpus says nothing about which of its members
 you own.
 
-**This is not computable today.** `PostgresCorpusMember` has no `teamId` and
-`listMembers()` does not `SELECT observations.team_id`. Per-member ownership needs
-that column carried through the member query and type; substituting the corpus's
-team is the defect, not a shortcut around it. Condition 10 starts there.
+**This was not computable in the reviewed revision.** At `77154737`,
+`PostgresCorpusMember` had no `teamId` and `listMembers()` did not
+`SELECT observations.team_id`, so the rule could not be evaluated at all and
+substituting the corpus's team was the defect rather than a shortcut around it.
+Per-member ownership needs that column carried through the member query and type.
+As of `3b8f002f` both are in place, and the reader is derived once by
+`authorizedReadProject()`; what is still open is the last step -- the serializer
+takes a per-corpus `foreign` boolean. Condition 10 records the state at that commit
+rather than asserting a "today" that keeps moving.
 
 Four things about the rule are the decision, and each of the first three is a
 mistake that was actually made:
@@ -870,10 +896,16 @@ mechanisms rather than prose:
    plus the `shared`-in-digest tests are what prevent it.
 3. **Provenance projected per corpus instead of per member** (revision 3) would make
    `build_corpus { scope: 'shared' }` a one-call way around the observation
-   projection, on an ordinary read/write key. It leaks publisher identity rather
-   than content, so D3 still bounds it, but every tenant with a read key is in
-   range. Condition 10's test -- read the sources of *your own* corpus built over
-   shared rows -- is the one that catches it; a cross-tenant read test does not.
+   projection, on an ordinary read/write key. Revision 3 called that "publisher
+   identity rather than content, so D3 still bounds it"; revision 4 corrected the
+   claim in D9 and revision 7 corrects it here. D3 bounds the *bodies* of unshared
+   observations and says nothing about free-form `metadata` attached to a shared
+   row, so what escapes is publisher identity **plus publisher-attached JSON of
+   unknown sensitivity** -- severity bounded by what generators happen to write
+   there, not by this design. Every tenant with a read key is in range, and the
+   disclosure is not recoverable once served. Condition 10's test -- read the sources
+   of *your own* corpus built over shared rows -- is the one that catches it; a
+   cross-tenant read test does not.
 
 ## Conditions on the implementing engineer
 
@@ -914,9 +946,10 @@ guarantee this ADR claims.
    retyping them, so the compatibility tests guard the shipped surface.
 9. **A cross-tenant `:name` or `:corpusId` returns `404`, never `403`.**
 
-Conditions 10-17 enforce D9. Added in revision 3 from the MCAA-345 review of
+Conditions 10-19 enforce D9. Added in revision 3 from the MCAA-345 review of
 MCAA-260; 10, 12 and 13 rewritten and 14-16 added in revision 4 from the MCAA-348
-second review; 17 added and the timing corrected in revision 6.
+second review; 17 added and the timing corrected in revision 6; 18 and 19 added in
+revision 7.
 
 **These are conditions on merging PR #7, not gates on the first release.** Revisions
 3-5 wrote "first release", which is one gate too late. The disclosure D9 exists to
@@ -932,21 +965,37 @@ rows standing between it and disclosure -- and publishing those rows is exactly 
 MCAA-286 turns on. ADR 0001's condition 4 rules the same way from the projection's
 side; the two records agree deliberately.
 
+Each clause below says what state it was written against. Where a clause described
+the implementation in the present tense, that description is now pinned to a commit
+(revision 7): `77154737` for the revision-3/4 reviews, `3b8f002f` for the re-read.
+A condition is satisfied when the code satisfies it, never because a sentence
+describing the old code went stale.
+
 10. **Decide the projection per member row, against the reader** -- never from a
     per-corpus `foreign` flag. A row is owned only when the row's own `team_id`
     *and* `project_id` match the authorized read (`isOwnerAuthorizedView`). Three
     parts, all required:
     - Carry `observations.team_id` through `listMembers()` and
-      `PostgresCorpusMember`. Neither has it today, so per-member ownership cannot
-      currently be evaluated at all; substituting the corpus's team is the defect.
+      `PostgresCorpusMember`; substituting the corpus's team is the defect.
+      **Satisfied at `3b8f002f`**: the member type carries `teamId` and the member
+      query selects `observations.team_id`. In the reviewed revision neither did,
+      so the rule was not evaluable.
     - Derive the reader once -- authenticated team, plus the project the key is
       authorized for (bound project for a project-scoped key; the addressed project
-      after authorization for a team-wide key). Today `loadMembers()` uses the
-      corpus's project and the id routes pass `''` for a team-wide key: two
-      competing ownership definitions, neither of them the reader. Keep corpus
-      authorization and member projection as separate decisions.
+      after authorization for a team-wide key). The reviewed revision held two
+      competing definitions: `loadMembers()` used the corpus's project and the id
+      routes passed `''` for a team-wide key. **Satisfied at `3b8f002f`** by
+      `authorizedReadProject()`, one definition used by both call paths, with corpus
+      authorization and member projection still separate decisions. Its `?? ''`
+      fallback is acceptable only while `observations.project_id` can never be the
+      empty string -- an empty stored `project_id` would make that row owner-visible
+      to any team-wide key in the same team. Assert the non-empty invariant at the
+      writer or drop the fallback in favour of a predicate that cannot match.
     - Apply the same owner test to the corpus's own `projectId`, so a same-team
-      sibling-project read is projected like any other non-owner read.
+      sibling-project read is projected like any other non-owner read. **Open at
+      `3b8f002f`**: `serializeSource(member, index, foreign)` still takes a
+      per-corpus boolean, which is the defect this condition exists to remove. This
+      is the clause condition 12's import closes.
 
     The test that proves it is not "read another tenant's shared corpus": it is
     **build your own corpus with `scope: 'shared'`, then read its sources**, and
@@ -1010,12 +1059,53 @@ side; the two records agree deliberately.
     `tests/contracts/corpus-v1.test.ts` asserts that a projected source carrying
     `projectId`, `teamId` or `metadata` **fails to parse**, so "optional" cannot
     decay into "sometimes sent" and the check fails closed.
+
+    **Satisfied for member rows at `3b8f002f`**, re-read in revision 7:
+    `CorpusOwnerSourceSchema` requires `projectId` and `metadata` on a strict shape,
+    `CorpusProjectedSourceSchema` is the strict base alone, `CorpusSourceSchema` is
+    their union, and `CORPUS_SOURCE_PROVENANCE_FIELDS` denies `teamId` and
+    `serverSessionId` on both variants -- neither ever carried them, and denying
+    them explicitly stops a later addition passing as additive. The tests cover the
+    half-projected row (one provenance field kept), which is the shape a per-corpus
+    ownership test produces. That is the right construction, and it is what closes
+    the "optional cannot fail closed" finding.
 17. **Correct the parity comment in `corpus-v1.ts`** that justifies the member field
     set as "the same rows `POST /v1/search { scope: 'shared' }` would return"
     (revision 6). MCAA-281 made that premise false, and it is the sentence that made
     the defect read as already handled -- three reviewers checked the field set
     against a contract that was itself citing the wrong surface. A stale
     justification is worse than none, because the next reader stops there.
+18. **The corpus-level fields need the same treatment as the member rows** -- new in
+    revision 7, and the one part of conditions 13 and 16 the contract at `3b8f002f`
+    does not yet express. Three concrete gaps, all in `corpus-v1.ts`:
+    - `CorpusDetailSchema` requires `filter`. Condition 13 requires `filter` to be
+      **omitted** on a non-owner read, so a correct non-owner response cannot be
+      represented: either the server violates condition 13 or the response fails its
+      own `.strict()` schema.
+    - `CorpusSummarySchema` requires `filterDigest`. Condition 13 omits it for the
+      same reason, with the same contradiction.
+    - `CorpusSummarySchema.projectId` is `z.string().min(1).optional()` with a
+      comment that it is omitted when `foreign` is true. That is exactly the
+      optional-sensitive-field shape condition 16 rejects one level up, and it is
+      keyed to the per-corpus `foreign` flag condition 10 removes.
+
+    Resolve all three the way condition 16 resolved the member rows: an owner detail
+    schema and a projected detail schema, mutually exclusive and both `.strict()`,
+    with the projected one omitting `projectId`, `filter` and `filterDigest`
+    entirely, and a test that a projected corpus carrying any of the three fails to
+    parse. Keep `foreign` on the summary -- it is a read-time fact about the corpus
+    row, not member provenance -- but it must stop being the input to any projection
+    decision. This is a contract-shape gate on the same merge of PR #7 as conditions
+    10-17, not a behaviour change: no field gains a new meaning.
+19. **One number per ADR, one copy per decision.** This record is ADR 0002 and ADR
+    0001 is the remote-client-mode record; see "Numbering, canonical" in the header.
+    MCAA-260's branch must delete `docs/adr/0001-remote-corpus-api-and-mcp-contract.md`
+    and its `docs/adr/README.md` row, because that path holds a stale revision-2
+    copy of this document and claims a number ADR 0001 already owns. Merging PR #4
+    and PR #7 as they stand lands two files numbered 0001 and two copies of this
+    decision at different revisions -- and a reader who finds the stale copy reads
+    conditions 10-19 as though they do not exist, including the merge gate above.
+    The ADR is owned by PR #4; PR #7 carries the implementation only.
 
 Recommended, not blocking: the `corpus_members(observation_id)` and
 `observations.metadata` GIN indexes in D1 (both are hot paths, not
@@ -1161,3 +1251,50 @@ Process note, third instance of the same mechanism: **the record that states a
 boundary must also state when it binds.** "Before release" and "before merge" are
 different instructions to the same engineer, and the weaker one wins by default if two
 records disagree.
+
+## Revision 7 -- conditions re-read against the implementation
+
+MCAA-354, raised by the implementing engineer on MCAA-260. Not a review finding and
+not a new decision: no boundary moves, no field changes side, `CORPUS_CONTRACT_VERSION`
+stays at 1. Four things were asked for and all four are here.
+
+| Asked | Answer in this revision |
+| --- | --- |
+| Reconcile D9 with the deletion of `sharedOrigin` | Already done in revision 5, independently and on the same reasoning. D9's "`sharedOrigin` is not in v1, on either surface" and condition 15 stand, and the requested statement is explicit: **a projected corpus member carries no origin token.** Revision 4's pseudonym is withdrawn, not deferred -- do not build the minting store. Condition 12 keeps the landing order with MCAA-346 inserted, and imports only `serializeObservationForViewer` and `isOwnerAuthorizedView`. |
+| Re-read condition 10 against `3b8f002f` before re-publishing | Done, clause by clause. Two of condition 10's three parts are now satisfied: `PostgresCorpusMember.teamId` plus `SELECT observations.team_id`, and one reader derived by `authorizedReadProject()` for both call paths. The third is open -- `serializeSource()` still takes a per-corpus `foreign` boolean. Condition 16 is satisfied for member rows: two mutually exclusive strict schemas, `CORPUS_SOURCE_PROVENANCE_FIELDS` denying `teamId` and `serverSessionId` on both, and a half-projected-row test. New condition 18 records what the re-read found still open at the corpus level. |
+| Blast radius must not read as identity-only | D9's paragraph was already corrected in revision 4; the duplicate claim in "Blast radius if this fails" item 3 was not, and is corrected here. Both now say the same thing: publisher identity plus publisher-attached JSON of unknown sensitivity. |
+| Pin the ADR numbering | Header now states the canonical numbering, names both stale citations and which one still resolves, and condition 19 requires PR #7 to delete its stale `0001-remote-corpus-api-and-mcp-contract.md` copy and index row. |
+
+The re-read also produced the one finding this revision adds. Condition 16 fixed the
+optional-sensitive-field shape on **member rows** and left it standing one level up:
+at `3b8f002f`, `CorpusDetailSchema` still requires `filter`, `CorpusSummarySchema`
+still requires `filterDigest`, and `CorpusSummarySchema.projectId` is still an
+optional field keyed to the per-corpus `foreign` flag. Condition 13 says all three are
+omitted on a non-owner read, so as written the contract cannot represent a
+condition-13-compliant response. Condition 18 resolves it with the same two-schema
+construction, on the same merge gate revision 6 set for conditions 10-17, and it is
+stated as a condition rather than left for the next reviewer to rediscover -- the same
+failure mode process note 2 named: a condition that lives only in a review comment is
+not a condition.
+
+Revision 6 landed while this re-read was in progress and moved the whole set from a
+first-release gate to a merge gate on PR #7. That ruling stands and it strengthens
+this one: conditions 18 and 19 bind at the same merge, and condition 17's stale parity
+comment is the same defect class as the stale present tense below -- a justification
+the reader trusts because nobody re-read it against the code.
+
+Two process notes, both about how this revision was needed at all:
+
+1. **Present tense in a normative document decays into a false statement.** Three of
+   condition 10's clauses described the implementation as it stood at `77154737`.
+   The engineer fixed two of them, and the ADR then read as though nothing had
+   happened -- a reviewer checking the document against the code finds a mismatch and
+   cannot tell whether the condition is unmet or the sentence is stale. Every clause
+   that describes code now names the commit it describes. State the requirement in
+   the present tense and the observation in the past tense, pinned.
+2. **A closed issue is not an address.** MCAA-348 assigned the D9 revision on
+   MCAA-259, which was already `done`, so the conditions sat where no heartbeat would
+   read them. Revision 5's process note 2 said cross-record conditions get an issue;
+   the sharper rule is that they get an **open** issue owned by whoever must act.
+   MCAA-354 is that issue, created by the engineer rather than by the reviewer or by
+   me -- which is the part of the mechanism that should not have to be improvised.
