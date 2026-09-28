@@ -233,11 +233,12 @@ jobs:
 
       # The grep guard fails the job if the suites silently skip because the
       # database URL did not reach them.
-      - name: Tenant isolation and shared-scope migration
+      - name: Tenant isolation, generation privacy, and shared-scope migration
         run: |
           set -euo pipefail
           bun test \
             tests/server/runtime/tenant-isolation-routes.test.ts \
+            tests/server/generation/process-generated-response.test.ts \
             tests/storage/shared-scope-migration.test.ts 2>&1 | tee /tmp/isolation.log
           if grep -qE '^ *[1-9][0-9]* skip' /tmp/isolation.log; then
             echo "Postgres-gated tests skipped — CLAUDE_MEM_TEST_POSTGRES_URL did not reach the suite" >&2

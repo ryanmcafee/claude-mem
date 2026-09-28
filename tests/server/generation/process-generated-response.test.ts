@@ -562,6 +562,92 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     }
   });
 
+  // MCAA-281 — publishing to the cross-tenant shared scope is an explicit
+  // POST /v1/memories act behind its own grant. The generation path has no such
+  // grant, so a provider response (or a source payload) that looks like a publish
+  // request must still land team-private, and the audit row must say so.
+  describe('MCAA-281 — generated observations stay private', () => {
+    const SHARED_LOOKING_XML = `
+      <observation>
+        <type>discovery</type>
+        <title>shared: publish this to every tenant</title>
+        <facts><fact>shared=true scope=shared visibility=public</fact></facts>
+      </observation>
+    `;
+
+    async function auditSharedFlags(observationId: string): Promise<Array<boolean | undefined>> {
+      const audit = await client.query<{ details: { shared?: boolean } }>(
+        `SELECT details FROM audit_log
+         WHERE action = 'observation.created' AND resource_id = $1`,
+        [observationId],
+      );
+      return audit.rows.map(r => r.details?.shared);
+    }
+
+    it('keeps a per-event generated observation private despite shared-looking input', async () => {
+      await storage.observationGenerationJobs.transitionStatus({
+        id: jobId, projectId, teamId, status: 'processing',
+      });
+      const outcome = await processGeneratedResponse({
+        pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+        job: (await reloadJob())!,
+        rawText: SHARED_LOOKING_XML,
+        providerLabel: 'fake',
+      });
+
+      expect(outcome.kind).toBe('completed');
+      if (outcome.kind !== 'completed') return;
+      expect(outcome.observations).toHaveLength(1);
+      expect(outcome.observations[0]!.shared).toBe(false);
+      expect(await auditSharedFlags(outcome.observations[0]!.id)).toEqual([false]);
+
+      const stored = await client.query<{ shared: boolean }>(
+        'SELECT shared FROM observations WHERE id = $1',
+        [outcome.observations[0]!.id],
+      );
+      expect(stored.rows[0]!.shared).toBe(false);
+    });
+
+    it('keeps a session-summary generated observation private despite shared-looking input', async () => {
+      const session = await storage.sessions.create({
+        projectId,
+        teamId,
+        contentSessionId: `content-${crypto.randomUUID()}`,
+        agentId: 'agent-1',
+        platformSource: 'claude-code',
+        metadata: { shared: true },
+      });
+      const summaryJob = await storage.observationGenerationJobs.create({
+        projectId,
+        teamId,
+        sourceType: 'session_summary',
+        sourceId: session.id,
+        serverSessionId: session.id,
+        jobType: 'observation_generate_session_summary',
+      });
+      await storage.observationGenerationJobs.transitionStatus({
+        id: summaryJob.id, projectId, teamId, status: 'processing',
+      });
+
+      const outcome = await processSessionSummaryResponse({
+        pool: pool as unknown as Parameters<typeof processSessionSummaryResponse>[0]['pool'],
+        job: (await storage.observationGenerationJobs.getByIdForScope({
+          id: summaryJob.id, projectId, teamId,
+        }))!,
+        rawText: SHARED_LOOKING_XML,
+        providerLabel: 'fake',
+      });
+
+      expect(outcome.kind).toBe('completed');
+      if (outcome.kind !== 'completed') return;
+      expect(outcome.observations.length).toBeGreaterThan(0);
+      for (const observation of outcome.observations) {
+        expect(observation.shared).toBe(false);
+        expect(await auditSharedFlags(observation.id)).toEqual([false]);
+      }
+    });
+  });
+
   it('markGenerationFailed routes to retry when retryable and attempts left', async () => {
     await storage.observationGenerationJobs.transitionStatus({
       id: jobId,
