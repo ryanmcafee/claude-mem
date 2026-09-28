@@ -136,7 +136,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     }))!;
 
     const outcome = await processSessionSummaryResponse({
-      pool: pool as unknown as Parameters<typeof processSessionSummaryResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: `
         <observation>
@@ -201,7 +201,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     }))!;
 
     const outcome = await processSessionSummaryResponse({
-      pool: pool as unknown as Parameters<typeof processSessionSummaryResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: `
         <observation>
@@ -234,7 +234,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     const fresh = (await reloadJob())!;
 
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: `
         <observation>
@@ -274,7 +274,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
 
     const fresh = (await reloadJob())!;
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: xml,
       providerLabel: 'fake',
@@ -318,7 +318,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
 
     const fresh = (await reloadJob())!;
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: xml,
       providerLabel: 'fake',
@@ -348,7 +348,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       await storage.observationGenerationJobs.transitionStatus({ id: jobId, projectId, teamId, status: 'processing' });
       const fresh = (await reloadJob())!;
       const outcome = await processGeneratedResponse({
-        pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+        pool,
         job: fresh,
         rawText: xml,
         providerLabel: 'fake',
@@ -379,7 +379,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       await storage.observationGenerationJobs.transitionStatus({ id: jobId, projectId, teamId, status: 'processing' });
       const fresh = (await reloadJob())!;
       await processGeneratedResponse({
-        pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+        pool,
         job: fresh, rawText: xml, providerLabel: 'fake', modelId: 'fake-1', tokensUsed: 999,
       });
       const n = await pool.query(`SELECT count(*)::int AS n FROM usage_events WHERE team_id = $1`, [teamId]);
@@ -401,7 +401,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
 
     const fresh = (await reloadJob())!;
     const first = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: xml,
       providerLabel: 'fake',
@@ -415,7 +415,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     // short-circuit the second call cleanly, demonstrating that retries
     // do not re-write observations.
     const second = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: xml,
       providerLabel: 'fake',
@@ -436,7 +436,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     });
     const fresh = (await reloadJob())!;
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: '<skip_summary reason="all_events_private" />',
       providerLabel: 'fake',
@@ -463,7 +463,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     });
     const fresh = (await reloadJob())!;
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: 'this is just prose without any xml',
       providerLabel: 'fake',
@@ -516,7 +516,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     }))!;
 
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: `
         <observation>
@@ -544,7 +544,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     });
     const fresh = (await reloadJob())!;
     const outcome = await processGeneratedResponse({
-      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      pool,
       job: fresh,
       rawText: `
         <observation>
@@ -571,7 +571,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     });
     const fresh = (await reloadJob())!;
     await markGenerationFailed({
-      pool: pool as unknown as Parameters<typeof markGenerationFailed>[0]['pool'],
+      pool,
       job: fresh,
       reason: 'transient',
       classification: 'transient',
