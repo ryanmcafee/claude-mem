@@ -219,6 +219,34 @@ provenance of any kind, pseudonymized or otherwise.
 `o.team_id` and `o.project_id` to the authorized event's own scope, so every row it can return
 already satisfies the ownership test by construction; it has no shared branch to redact.
 
+### Every surface that can return an observation body cross-tenant goes through this function
+
+The scope of the rule is the trust boundary, not the route list. Any new surface that can hand a
+caller the content of a row it does not own -- a search, a bundle, a rendered prompt, a cache entry
+-- serializes through `serializeObservationForViewer` or is recorded here as an exception with the
+reason its SQL makes the shared branch unreachable.
+
+This is not hypothetical. The corpus surface (MCAA-260, PR #7) is a second read path over the same
+rows: `?include=sources` returns member bodies, and `query_corpus` renders every member into the
+text a foreign reader is answered from. Its author found and fixed the bypass -- including the
+non-obvious one, that the render cache is keyed on the membership digest with no viewer dimension,
+so an owner's primed render would have been served verbatim to another tenant. Good catch, and the
+field set it produces today is correct.
+
+It is nonetheless a **second implementation of one rule**, and two things must be reconciled before
+the enablement gate (condition 4 below):
+
+- **Its rule is shaped as a denylist, this one as an allowlist.** `serializeSource` spreads
+  `foreign ? {} : { projectId, metadata }` -- it names what to withhold. The projection names what
+  to emit, against a deliberately empty `SHARED_METADATA_ALLOWLIST`. Add a column to `observations`
+  tomorrow and the search path keeps it private by default while the corpus path publishes it by
+  default. The divergence is in the shape of the rule, not in today's output, which is exactly the
+  kind of defect that stays invisible until the commit that triggers it.
+- **The ownership tests differ.** The corpus path tests `corpus.teamId !== caller.teamId`; this
+  projection tests team **and** project, because a same-team row outside the queried project also
+  arrived through the shared branch. Either the corpus path adopts the same two-part test, or this
+  ADR records why a corpus is addressed differently from the rows inside it.
+
 ## Ratification: reducing the cross-tenant row is not a breaking change
 
 The design review of PR #8 raised a fair question. A pre-existing MCAA-237 test,
@@ -264,6 +292,12 @@ migration path. The conditions below exist because deciding now is free and deci
 3. **The owner view must stay byte-identical to the shape recorded above.** That equality is what
    makes this change non-breaking, so it is the first thing a future reviewer should check when the
    projection is touched.
+4. **The corpus surface reconciles onto the single projection.** `serializeSource` and
+   `renderCorpus`'s `redactProvenance` branch must produce the shared view by calling
+   `serializeObservationForViewer`, not by re-deriving it, and must adopt the team-and-project
+   ownership test -- or this ADR records why a corpus differs. Cheap now, because PR #7 rebases
+   onto the projection anyway; expensive after enablement, when two paths with drifting rules are
+   both shipped contracts.
 
 ## Consequences
 
