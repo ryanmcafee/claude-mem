@@ -10,12 +10,16 @@
 import { describe, it, expect } from 'bun:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createRecallMcpServer, type RecallBackend } from '../../../src/server/mcp/recall-mcp-server.js';
+import {
+  createRecallMcpServer,
+  type RecallBackend,
+  type RecallScope,
+} from '../../../src/server/mcp/recall-mcp-server.js';
 
 interface Recorded {
-  search: Array<{ projectId: string; query: string; limit: number }>;
-  context: Array<{ projectId: string; query: string; limit: number }>;
-  recent: Array<{ projectId: string; limit: number }>;
+  search: Array<{ projectId: string; query: string; limit: number; scope: RecallScope }>;
+  context: Array<{ projectId: string; query: string; limit: number; scope: RecallScope }>;
+  recent: Array<{ projectId: string; limit: number; scope: RecallScope }>;
 }
 
 function makeBackend(overrides: Partial<RecallBackend> = {}): { backend: RecallBackend; calls: Recorded } {
@@ -70,7 +74,7 @@ describe('createRecallMcpServer', () => {
       name: 'search',
       arguments: { projectId: 'p1', query: 'hello', limit: 9999 },
     });
-    expect(calls.search[0]).toEqual({ projectId: 'p1', query: 'hello', limit: 100 });
+    expect(calls.search[0]).toEqual({ projectId: 'p1', query: 'hello', limit: 100, scope: 'project' });
     expect(JSON.parse(textOf(res)).observations).toHaveLength(2);
     await client.close();
   });
@@ -89,7 +93,7 @@ describe('createRecallMcpServer', () => {
     const { backend, calls } = makeBackend();
     const client = await connectClient(backend);
     await client.callTool({ name: 'recent', arguments: { projectId: 'p2' } });
-    expect(calls.recent[0]).toEqual({ projectId: 'p2', limit: 20 });
+    expect(calls.recent[0]).toEqual({ projectId: 'p2', limit: 20, scope: 'project' });
     await client.close();
   });
 
@@ -118,5 +122,42 @@ describe('createRecallMcpServer', () => {
     const res = await client.callTool({ name: 'nope', arguments: {} });
     expect(res.isError).toBe(true);
     await client.close();
+  });
+
+  // MCAA-237 — the shared scope must be reachable, and must be reachable ONLY
+  // by asking for it by name. Anything else narrows to the caller's own tenant.
+  describe('shared scope', () => {
+    it('forwards an explicit shared scope on every read tool', async () => {
+      const { backend, calls } = makeBackend();
+      const client = await connectClient(backend);
+      await client.callTool({ name: 'search', arguments: { projectId: 'p1', query: 'q', scope: 'shared' } });
+      await client.callTool({ name: 'context', arguments: { projectId: 'p1', query: 'q', scope: 'shared' } });
+      await client.callTool({ name: 'recent', arguments: { projectId: 'p1', scope: 'shared' } });
+      expect(calls.search[0]?.scope).toBe('shared');
+      expect(calls.context[0]?.scope).toBe('shared');
+      expect(calls.recent[0]?.scope).toBe('shared');
+      await client.close();
+    });
+
+    it('narrows an unrecognised or forged scope value to the caller\'s tenant', async () => {
+      const { backend, calls } = makeBackend();
+      const client = await connectClient(backend);
+      for (const scope of ['global', 'all', 'SHARED', '*', true, 1, null]) {
+        await client.callTool({ name: 'search', arguments: { projectId: 'p1', query: 'q', scope } });
+      }
+      expect(calls.search.every(call => call.scope === 'project')).toBe(true);
+      await client.close();
+    });
+
+    it('advertises the scope parameter so a client can discover the opt-in', async () => {
+      const client = await connectClient(makeBackend().backend);
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        const properties = tool.inputSchema.properties as Record<string, { enum?: unknown[] }> | undefined;
+        expect(properties?.scope?.enum).toEqual(['project', 'shared']);
+        expect(tool.inputSchema.required).not.toContain('scope');
+      }
+      await client.close();
+    });
   });
 });

@@ -25,6 +25,17 @@ export const SERVER_POSTGRES_TABLES = [
   'rate_limit_counters'
 ] as const;
 
+/**
+ * Down path for the MCAA-237 shared-scope column. Kept next to the forward DDL
+ * so the rollback is exercised by tests rather than reconstructed by hand
+ * during an incident. Re-running the bootstrap after this re-adds the column
+ * with its `false` default; no row data outside the column itself is touched.
+ */
+export const SHARED_SCOPE_DOWN_SQL = `
+DROP INDEX IF EXISTS idx_observations_shared;
+ALTER TABLE observations DROP COLUMN IF EXISTS shared;
+`;
+
 export async function bootstrapServerPostgresSchema(client: PostgresQueryable): Promise<void> {
   if (isPostgresPool(client)) {
     const poolClient = await client.connect();
@@ -279,6 +290,15 @@ CREATE INDEX IF NOT EXISTS idx_server_sessions_platform_source
   ON server_sessions(team_id, project_id, platform_source, started_at)
   WHERE platform_source IS NOT NULL;
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS content_search TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+-- MCAA-237 — shared (cross-tenant) knowledge. An observation stays private to
+-- its own team unless it is published with shared = true, and a read only sees
+-- shared rows when the query opts in. Additive with a false default, so every
+-- existing row and every existing query keeps its current meaning.
+-- Down: see SHARED_SCOPE_DOWN_SQL below.
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS shared BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_observations_shared
+  ON observations(shared, updated_at DESC)
+  WHERE shared;
 ALTER TABLE observations DROP CONSTRAINT IF EXISTS observations_generation_key_key;
 ALTER TABLE observation_generation_jobs DROP CONSTRAINT IF EXISTS observation_generation_jobs_source_type_source_id_job_type_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_server_sessions_project_idempotency

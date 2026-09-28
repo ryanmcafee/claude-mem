@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
+import { assertLocalMemoryDatabaseAllowed } from '../../shared/remote-mode.js';
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 4194304;
@@ -55,11 +56,24 @@ export function applySqliteConnectionPragmas(
   }
 }
 
+/**
+ * bun:sqlite creates the file unless told otherwise, and its options argument
+ * may be a flags number rather than an object. Anything that is not an explicit
+ * read-only or `create: false` object open is treated as creating.
+ */
+function opensForCreate(options?: DatabaseOptions): boolean {
+  if (options === undefined || typeof options !== 'object') return true;
+  const candidate = options as { readonly?: unknown; create?: unknown };
+  return candidate.readonly !== true && candidate.create !== false;
+}
+
 export function openConfiguredSqliteDatabase(
   dbPath: string,
   options?: DatabaseOptions,
   pragmas?: SqlitePragmaOptions,
 ): Database {
+  // MCAA-237 — remote mode must leave no local memory database behind.
+  assertLocalMemoryDatabaseAllowed(dbPath, { create: opensForCreate(options) });
   const db = new Database(dbPath, options);
   applySqliteConnectionPragmas(db, pragmas);
   return db;

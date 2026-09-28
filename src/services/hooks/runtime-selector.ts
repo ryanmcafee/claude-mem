@@ -19,6 +19,10 @@
 
 import { loadFromFileOnce } from '../../shared/hook-settings.js';
 import { logger } from '../../utils/logger.js';
+import {
+  isRemoteModeRequested,
+  resolveRemoteModeConfig,
+} from '../../shared/remote-mode.js';
 import { ServerClient, type ServerClientConfig } from './server-client.js';
 
 export type SelectedRuntime = 'worker' | 'server';
@@ -28,6 +32,15 @@ export interface ServerRuntimeContext {
   client: ServerClient;
   projectId: string;
   serverBaseUrl: string;
+  /** Agent identity recorded alongside team + project on every write. */
+  agentId: string | null;
+  /** Reads default to the shared scope instead of this tenant only. */
+  includeShared: boolean;
+  /**
+   * True when the configuration came from remote mode, which forbids falling
+   * back to the local worker. Callers must surface errors instead of degrading.
+   */
+  remote: boolean;
 }
 
 export interface WorkerRuntimeContext {
@@ -38,6 +51,10 @@ export type RuntimeContext = ServerRuntimeContext | WorkerRuntimeContext;
 
 export function selectRuntime(): SelectedRuntime {
   const settings = loadFromFileOnce();
+  // MCAA-237 — remote mode is a server runtime that additionally forbids the
+  // worker fallback. Checked first so an env-configured container resolves to
+  // the server runtime without needing a settings.json at all.
+  if (isRemoteModeRequested({ settings })) return 'server';
   const raw = (settings.CLAUDE_MEM_RUNTIME ?? 'worker').trim().toLowerCase();
   // Accept both the canonical `'server'` (Phase 1a) and the legacy
   // `'server-beta'` literal for back-compat with installed settings.json.
@@ -45,8 +62,31 @@ export function selectRuntime(): SelectedRuntime {
   return 'worker';
 }
 
+/**
+ * True when this process must talk to a remote server and must never spawn a
+ * worker or open a local database. See src/shared/remote-mode.ts.
+ */
+export function isRemoteRuntime(): boolean {
+  return isRemoteModeRequested({ settings: loadFromFileOnce() });
+}
+
 export function buildServerContext(): ServerRuntimeContext | null {
   const settings = loadFromFileOnce();
+  // MCAA-237 — remote mode owns its own resolution: env vars take precedence
+  // over settings.json, and an incomplete configuration throws instead of
+  // returning null, because null here means "fall back to the local worker".
+  if (isRemoteModeRequested({ settings })) {
+    const config = resolveRemoteModeConfig({ settings });
+    return {
+      runtime: 'server',
+      client: new ServerClient({ serverBaseUrl: config.serverUrl, apiKey: config.apiKey }),
+      projectId: config.projectId,
+      serverBaseUrl: config.serverUrl,
+      agentId: config.agentId,
+      includeShared: config.includeShared,
+      remote: true,
+    };
+  }
   // Phase 1a: read new keys first, fall back to legacy `*_BETA_*` keys so
   // existing settings.json files keep resolving the server runtime.
   // Treat empty string the same as missing — `settings.json` populated from
@@ -94,13 +134,25 @@ export function buildServerContext(): ServerRuntimeContext | null {
     client: new ServerClient(config),
     projectId,
     serverBaseUrl,
+    agentId: null,
+    includeShared: false,
+    remote: false,
   };
 }
 
+/**
+ * Resolve the runtime a hook should use.
+ *
+ * In remote mode this throws `RemoteModeConfigError` on an incomplete
+ * configuration rather than returning the worker context: silently writing to a
+ * local SQLite file that nobody reads is the failure this mode exists to
+ * prevent.
+ */
 export function resolveRuntimeContext(): RuntimeContext {
   if (selectRuntime() !== 'server') {
     return { runtime: 'worker' };
   }
+  // buildServerContext throws in remote mode; let it propagate.
   const ctx = buildServerContext();
   if (!ctx) {
     return { runtime: 'worker' };
