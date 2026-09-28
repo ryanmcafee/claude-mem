@@ -16,7 +16,7 @@ import {
   type PostgresObservationGenerationJob,
 } from '../../../storage/postgres/generation-jobs.js';
 import { PostgresAuthRepository } from '../../../storage/postgres/auth.js';
-import { PostgresObservationRepository } from '../../../storage/postgres/observations.js';
+import { buildClientIdempotencyKey, PostgresObservationRepository } from '../../../storage/postgres/observations.js';
 import { PostgresProjectsRepository } from '../../../storage/postgres/projects.js';
 import { logger } from '../../../utils/logger.js';
 import { requirePostgresServerAuth } from '../../middleware/postgres-auth.js';
@@ -904,6 +904,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         // Publish this observation to the cross-tenant shared scope. Requires
         // the SHARED_WRITE_SCOPE grant; omitted means team-private.
         shared: z.boolean().optional(),
+        // MCAA-241 — caller-supplied dedup key, unique per (team, project). A
+        // repeat write returns the stored row with `created: false` and changes
+        // nothing, which is what makes the SQLite import re-runnable.
+        idempotencyKey: z.string().min(1).max(512).optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -927,16 +931,24 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           content: body.content,
           metadata: body.metadata ?? {},
           shared: body.shared === true,
+          generationKey: body.idempotencyKey
+            ? buildClientIdempotencyKey(body.idempotencyKey)
+            : null,
         };
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
-          const observation = await repo.create(createInput);
-          // `shared` makes "who published what to every tenant" answerable from
-          // the audit log alone, instead of only by reading the rows back.
-          await this.auditWrite(req, 'memory.write', observation.id, observation.projectId, {
-            shared: observation.shared === true,
+          const { observation, created } = await repo.createIfAbsent(createInput);
+          if (created) {
+            // `shared` makes "who published what to every tenant" answerable from
+            // the audit log alone, instead of only by reading the rows back.
+            await this.auditWrite(req, 'memory.write', observation.id, observation.projectId, {
+              shared: observation.shared === true,
+            });
+          }
+          res.status(created ? 201 : 200).json({
+            memory: serializeObservation(observation),
+            created,
           });
-          res.status(201).json({ memory: serializeObservation(observation) });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           logger.warn('SYSTEM', 'memory.write failed', { requestId: req.requestId ?? null }, err);
