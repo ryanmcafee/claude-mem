@@ -1,8 +1,8 @@
 # ADR 0002 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 7 -- conditions re-read against the implementation at
-  `3b8f002f`; they bind on merging PR #7, per revision 6)
-- Date: 2026-09-28 (revisions 3-7; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 8 -- two MCAA-348 sub-clauses that never became
+  conditions are now conditions 20-21; they bind on merging PR #7, per revision 6)
+- Date: 2026-09-28 (revisions 3-8; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
@@ -24,6 +24,10 @@
   numbering below. No further second review is required for revision 7: it moves no
   boundary and loosens nothing. Condition 18 makes the contract express a requirement
   conditions 13 and 16 already imposed, and condition 19 is numbering hygiene.
+  Revision 8 comes from re-reading MCAA-348's fourth finding clause by clause against
+  revisions 4-7: two of its sub-clauses were answered in D9 prose but never became
+  conditions, so nobody owned them. Conditions 20-21 fix that. No second review is
+  required: both tighten this record's own keeps and neither moves a boundary.
 - **Numbering, canonical.** This record is ADR **0002**. ADR **0001** is
   "Remote client mode, tenant binding and opt-in shared scope" (PR #6). MCAA-348's
   review cites this document as `0001-remote-corpus-api-and-mcp-contract.md` and
@@ -347,7 +351,7 @@ and the recall tools now project any row reached through the shared branch down 
 content plus an opaque origin token. The "same rows a shared search would return"
 equivalence therefore no longer licenses returning the stored row -- it licenses
 returning the *projection* of it. Any corpus surface that returns more is a way
-around that projection. D9 states the rule; conditions 10-19 are what enforce it.
+around that projection. D9 states the rule; conditions 10-21 are what enforce it.
 
 Worth recording why the build-time invariant is currently airtight: there is **no
 `UPDATE observations` statement anywhere in the repository.** Observations are
@@ -805,12 +809,36 @@ time from a render that included every member's metadata, so handing it to a
 non-owner leaks a measurement of the text that was withheld. Non-owner statistics
 are recomputed from the projected member set. `contentDigest` is acceptable only
 when computed over the membership that reader is actually authorized to see.
-Observation `id` stays as a citation handle, on the condition that every
-dereference of it re-authorizes and that ids remain opaque at the write boundary
-(`newId()` is a random UUID, but the repository also accepts caller-supplied ids --
-that invariant belongs at the writer, not here). Exact timestamps plus stable ids
-permit cross-surface correlation and activity timing; that disclosure is accepted
-deliberately and recorded here, rather than justified by parity with search.
+
+"Recomputed from the projected member set" means the set **as of this read**, and
+revisions 4-7 left the other half of that unsaid: a statistic that spans membership
+history discloses rows the reader cannot see now and could not see then. A count or
+date range covering removed members is exactly that, and the projection has no hold
+on a row that is no longer a member. So non-owner statistics cover only currently
+visible authorized membership -- no historical counts, no first/last-seen range over
+removed members, no "was larger" signal. That is condition 21; the second review
+offered "avoid or explicitly accept", and this record avoids rather than accepts,
+because the disclosure buys a non-owner nothing the current membership does not
+already give them.
+
+Observation `id` stays as a citation handle on two conditions: every dereference of
+it re-authorizes, and ids remain opaque at the write boundary. Revisions 4-7 stated
+the second one and then handed it to nobody -- "that invariant belongs at the writer,
+not here" -- which is the failure mode this ADR has now named three times. It is a
+condition of a keep in *this* record, so it gets an owner here: condition 20.
+`newId()` is a random UUID, but `PostgresObservationRepository.create()` and
+`PostgresObservationSourcesRepository.addSource()` both take `id?: string` and write
+`input.id ?? newId()`, so the invariant is a convention, not an enforced property. No
+remote route passes an id today, so this is a latent seam rather than a live
+disclosure -- which is the reason it is a condition and not an incident.
+
+Exact timestamps plus stable ids permit cross-surface correlation and activity
+timing; that disclosure is accepted deliberately and recorded here, rather than
+justified by parity with search. Note what that acceptance rests on: it is
+defensible precisely *because* the id carries no information beyond identity. An id
+that encoded anything about its row, or that a caller chose, would make the same
+timestamps a different disclosure -- so condition 20 is what keeps this paragraph
+true, not a separate hardening nicety.
 
 **Versioning.** None of this bumps `CORPUS_CONTRACT_VERSION`. `corpus-v1.ts` has not
 shipped -- MCAA-259 is still an open PR, there is no released client, so the
@@ -946,10 +974,11 @@ guarantee this ADR claims.
    retyping them, so the compatibility tests guard the shipped surface.
 9. **A cross-tenant `:name` or `:corpusId` returns `404`, never `403`.**
 
-Conditions 10-19 enforce D9. Added in revision 3 from the MCAA-345 review of
+Conditions 10-21 enforce D9. Added in revision 3 from the MCAA-345 review of
 MCAA-260; 10, 12 and 13 rewritten and 14-16 added in revision 4 from the MCAA-348
 second review; 17 added and the timing corrected in revision 6; 18 and 19 added in
-revision 7.
+revision 7; 20 and 21 added in revision 8, from two MCAA-348 sub-clauses that
+revision 4 answered in prose without giving them an owner.
 
 **These are conditions on merging PR #7, not gates on the first release.** Revisions
 3-5 wrote "first release", which is one gate too late. The disclosure D9 exists to
@@ -1104,8 +1133,33 @@ describing the old code went stale.
     copy of this document and claims a number ADR 0001 already owns. Merging PR #4
     and PR #7 as they stand lands two files numbered 0001 and two copies of this
     decision at different revisions -- and a reader who finds the stale copy reads
-    conditions 10-19 as though they do not exist, including the merge gate above.
+    conditions 10-21 as though they do not exist, including the merge gate above.
     The ADR is owned by PR #4; PR #7 carries the implementation only.
+20. **Enforce the observation-id opacity invariant at the writer** -- new in
+    revision 8. D9 keeps observation `id` on a projected row *on the condition* that
+    ids are opaque, and revisions 4-7 assigned that condition to nobody. At
+    `3b8f002f`, `PostgresObservationRepository.create()` and
+    `PostgresObservationSourcesRepository.addSource()` both accept `id?: string` and
+    write `input.id ?? newId()`; no v1 route passes one, so the seam is latent, not a
+    live disclosure. Required: any observation that can ever be `shared` carries a
+    server-generated random id, asserted at the write boundary rather than assumed --
+    either drop `id?:` from the remote-reachable write paths or assert
+    server-generation there -- with a test that a caller-supplied id is refused on
+    that path. State the rule as "opaque", not "never supplied": an import that
+    preserves ids is a legitimate explicit-id writer (MCAA-241 is one), so the
+    invariant it must meet is that it never imports **guessable** ids onto a row that
+    can become shared. This condition is not on PR #7's surface -- it is the
+    observation writer -- so it is carried to its own issue, per revision 5's process
+    note 2.
+21. **Non-owner statistics cover current visible membership only** -- new in
+    revision 8, the other MCAA-348 sub-clause revision 4 answered in prose without
+    making it a condition. Condition 16 requires non-owner statistics to be
+    recomputed from the projected member set; this says *which* set that is. No
+    statistic served to a non-owner may span membership history: no count including
+    removed members, no first/last-seen range over them, no signal that the corpus
+    was previously larger. D9 explains why this record avoids the disclosure rather
+    than accepting it. The test: remove a foreign member, and no value a non-owner
+    can observe changes except the ones describing the membership they can now see.
 
 Recommended, not blocking: the `corpus_members(observation_id)` and
 `observations.metadata` GIN indexes in D1 (both are hot paths, not
@@ -1298,3 +1352,35 @@ Two process notes, both about how this revision was needed at all:
    the sharper rule is that they get an **open** issue owned by whoever must act.
    MCAA-354 is that issue, created by the engineer rather than by the reviewer or by
    me -- which is the part of the mechanism that should not have to be improvised.
+
+## Revision 8 -- two conditions that were prose
+
+Not a new review and not a new decision. I re-read MCAA-348's fourth finding
+("project derived values too") clause by clause against what revisions 4-7 actually
+did with it, because that finding is the one whose answer was spread across D9 prose
+and condition 16 rather than landing in a single place. Two of its sub-clauses were
+answered in the prose and never became conditions:
+
+| MCAA-348 sub-clause | State before revision 8 | Now |
+| --- | --- | --- |
+| Observation ids may stay as citation handles "provided all dereferences still authorize and normal writers produce opaque IDs ... so enforce that invariant at write boundaries" | D9 stated the invariant and then explicitly disclaimed it: "that invariant belongs at the writer, not here". No condition, no owner, no test. The keep of `id` on a projected row rested on a convention. | Condition 20, with an owner. `create()` and `addSource()` both take `id?: string` at `3b8f002f` and no v1 route passes one, so the seam is latent -- stated as such, because a condition mis-sold as an incident gets discounted. |
+| "Avoid exposing historical counts/date ranges for removed members unless their disclosure is explicitly accepted" | Neither avoided nor accepted -- absent. Condition 16 said non-owner statistics are recomputed from the projected member set without saying whether that set is current or historical. | Condition 21: current visible authorized membership only. The review offered avoid-or-accept and this record avoids. |
+
+Both bind at the same PR #7 merge gate as conditions 10-19, except condition 20,
+which is not on PR #7's surface at all and therefore gets its own issue.
+
+Process note, fourth instance of the mechanism this ADR keeps rediscovering.
+Revision 5's note 2 said cross-record conditions get an issue. Revision 7's note 2
+sharpened it to an **open** issue owned by whoever must act. Revision 8 sharpens it
+once more, because both gaps here share one shape: **answering a review finding in
+the discussion is not the same as answering it in the conditions.** D9 discussed both
+sub-clauses honestly -- the id paragraph even named the exact code that breaks the
+invariant -- and the implementing engineer reads the numbered list. A finding is
+discharged when it appears where the work is assigned, not where the reasoning is
+recorded. The previous three instances were about *which* record or *when* it binds;
+this one is about which **section**, which is the same error at a smaller scale.
+
+That also explains why this revision exists rather than the next reviewer finding it:
+MCAA-348 is `done` and its verdict was applied once, in revision 4. Nothing re-checks
+an applied verdict against the conditions it was supposed to become. This re-read was
+the check, and conditions 20-21 are what it found.
