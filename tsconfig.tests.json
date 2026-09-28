@@ -23,6 +23,8 @@
     "dist",
     "tests/**/*.test.js",
     "tests/**/*.spec.js",
+    // Covered by `tsconfig.viewer-tests.json`, which carries the DOM lib.
+    "tests/viewer",
     "tests/bun-runner.test.ts",
     "tests/cli/handlers/session-init-plugin-cache-skip.test.ts",
     "tests/cli/server-jobs.test.ts",
@@ -32,11 +34,8 @@
     "tests/hooks/file-context.test.ts",
     "tests/hooks/server-client.test.ts",
     "tests/infrastructure/cleanup-v12_4_3.test.ts",
-    "tests/infrastructure/health-monitor.test.ts",
     "tests/install-error-matrix.test.ts",
-    "tests/install-shutdown-helper.test.ts",
     "tests/integration/hook-execution-e2e.test.ts",
-    "tests/integration/opencode-installer.test.ts",
     "tests/integration/worker-api-endpoints.test.ts",
     "tests/integrations/telegram-wrapup-notifier.test.ts",
     "tests/observer-health.test.ts",
@@ -71,21 +70,16 @@
     "tests/storage/postgres/platform-source-scoping.test.ts",
     "tests/telemetry/buffer.test.ts",
     "tests/telemetry/skill-id.test.ts",
-    "tests/viewer/welcome-card-storage.test.ts",
     "tests/worker/agents/response-processor.test.ts",
     "tests/worker/claude-provider-assistant-frames.test.ts",
     "tests/worker/claude-setup-gate.test.ts",
     "tests/worker/http/routes/cloud-sync-routes.test.ts",
-    "tests/worker/http/routes/data-routes-delete-sync.test.ts",
     "tests/worker/openai-compatible-init-response.test.ts",
     "tests/worker/openai-compatible-summary-tier.test.ts",
     "tests/worker/openrouter-messages.test.ts",
-    "tests/worker/openrouter-provider.test.ts",
     "tests/worker/search/search-orchestrator.test.ts",
     "tests/worker/session-manager-project.test.ts",
     "tests/worker/session-manager-wrapup.test.ts",
-    "tests/worker/sync/cloud-sync-health.test.ts",
-    "tests/worker/sync/cloud-sync.test.ts",
-    "tests/worker/sync/sync-client.test.ts"
+    "tests/worker/sync/cloud-sync.test.ts"
   ]
 }
