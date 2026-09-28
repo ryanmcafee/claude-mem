@@ -914,9 +914,23 @@ guarantee this ADR claims.
    retyping them, so the compatibility tests guard the shipped surface.
 9. **A cross-tenant `:name` or `:corpusId` returns `404`, never `403`.**
 
-Conditions 10-16 enforce D9. Added in revision 3 from the MCAA-345 review of
+Conditions 10-17 enforce D9. Added in revision 3 from the MCAA-345 review of
 MCAA-260; 10, 12 and 13 rewritten and 14-16 added in revision 4 from the MCAA-348
-second review. All are gates on the **first release**, not deferred acceptance.
+second review; 17 added and the timing corrected in revision 6.
+
+**These are conditions on merging PR #7, not gates on the first release.** Revisions
+3-5 wrote "first release", which is one gate too late. The disclosure D9 exists to
+close is reachable by an ordinary `memories:read` + `memories:write` caller -- no
+`memories:write:shared` grant, no `CLAUDE_MEM_INCLUDE_SHARED` -- because
+`memberPredicate`'s `($shared AND observations.shared)` disjunct carries no team
+predicate while the ownership test is computed on the container. Build an own-project
+corpus with `{ shared: false, filter: { scope: "shared" } }` and every tenant's shared
+rows join a corpus you own, so `foreign` is `false` and `serializeSource` returns their
+`projectId` and `metadata` whole. Merging that and fixing it before release leaves an
+independently vulnerable surface on `main` with only the absence of published shared
+rows standing between it and disclosure -- and publishing those rows is exactly what
+MCAA-286 turns on. ADR 0001's condition 4 rules the same way from the projection's
+side; the two records agree deliberately.
 
 10. **Decide the projection per member row, against the reader** -- never from a
     per-corpus `foreign` flag. A row is owned only when the row's own `team_id`
@@ -947,7 +961,12 @@ second review. All are gates on the **first release**, not deferred acceptance.
     covers `prime`, `reprime`, `query` and the system prompt, and it holds for an
     **empty member set** too: "every member is owner-authorized" must not pass
     vacuously and hand a non-owner the owner's cached prompt. Keep `prime`/`reprime`
-    owner-only so the converse cannot happen either.
+    owner-only so the converse cannot happen either. **The fix is code plus a purge**
+    (revision 6): an artifact primed before it lands already holds foreign provenance
+    in its text, and the digest cache key cannot tell a projected render from an
+    unprojected one, so the code change alone leaves the disclosure sitting in stored
+    state. Delete every `corpus_artifacts` row for a corpus whose members are not all
+    owner-authorized for its owner, in the same change.
 12. **One implementation, projection first.** Import
     `serializeObservationForViewer` and `isOwnerAuthorizedView` from
     `src/server/routes/v1/observation-projection.ts`. Do not re-derive the rule in
@@ -991,6 +1010,12 @@ second review. All are gates on the **first release**, not deferred acceptance.
     `tests/contracts/corpus-v1.test.ts` asserts that a projected source carrying
     `projectId`, `teamId` or `metadata` **fails to parse**, so "optional" cannot
     decay into "sometimes sent" and the check fails closed.
+17. **Correct the parity comment in `corpus-v1.ts`** that justifies the member field
+    set as "the same rows `POST /v1/search { scope: 'shared' }` would return"
+    (revision 6). MCAA-281 made that premise false, and it is the sentence that made
+    the defect read as already handled -- three reviewers checked the field set
+    against a contract that was itself citing the wrong surface. A stale
+    justification is worse than none, because the next reader stops there.
 
 Recommended, not blocking: the `corpus_members(observation_id)` and
 `observations.metadata` GIN indexes in D1 (both are hot paths, not
@@ -1099,3 +1124,40 @@ Three process notes, because the mechanism matters more than this field:
    records. Renumbered here to `0002`; the client-mode ADR keeps `0001` as the
    earlier decision. The index links it before PR #6 merges, so that row is dead
    until then.
+
+## Revision 6 -- the conditions were one gate too late
+
+Not a new finding. A timing disagreement between this record and ADR 0001, both mine,
+which revision 5's own process note predicted would keep happening.
+
+The Workflow & Eventing Engineer took the D9 divergence from "two implementations of
+one rule, reconcile before release" to a reachable disclosure, by naming the part both
+earlier reviews had described but not connected: `foreign` is computed on the
+*container*, and the container's build predicate deliberately admits other tenants'
+rows. So the leak does not need a foreign corpus, a curator key, or a widened read --
+it needs an own-project corpus built with `filter.scope = 'shared'`, which any
+read/write key can create. I confirmed every step at `d087e0a2` before ruling. The
+MCAA-348 second review reached the same reachability independently; three records now
+agree.
+
+What that changes is *when*, not *what*. Conditions 10-16 were already the right
+conditions; calling them first-release gates would have let the vulnerable surface onto
+`main` on the strength of a data precondition that MCAA-286 exists to remove. They are
+merge conditions on PR #7 now, in both records.
+
+Two things the earlier revisions genuinely missed, rather than mistimed:
+
+- **The leak is stored, not just returned.** `redactProvenance` is false for an
+  own-team corpus, `renderMember` emits metadata *values*, and that render is persisted.
+  Condition 11 guarded the cache from serving an owner's render to a non-owner -- the
+  reverse direction from the one that is open. Remediation is code plus a purge.
+- **The contract was citing the surface that changed.** `corpus-v1.ts` justifies its
+  member field set as parity with a shared search, which MCAA-281 falsified. Revision 3
+  retracted the same parity argument in D3 and revision 5 named it a pattern; the
+  comment in the code was never corrected. Condition 17 does that, because the
+  justification is what the next reviewer reads before the field list.
+
+Process note, third instance of the same mechanism: **the record that states a
+boundary must also state when it binds.** "Before release" and "before merge" are
+different instructions to the same engineer, and the weaker one wins by default if two
+records disagree.
