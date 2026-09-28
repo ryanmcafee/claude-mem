@@ -8,7 +8,7 @@
 // rather than re-declaring shapes, because tests/contracts/corpus-v1.test.ts
 // guards only what this module exports.
 //
-// Decisions and rationale: docs/adr/0001-remote-corpus-api-and-mcp-contract.md
+// Decisions and rationale: docs/adr/0002-remote-corpus-api-and-mcp-contract.md
 // A future incompatible change adds corpus-v2.ts beside this file; v1 keeps
 // serving.
 
