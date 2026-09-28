@@ -54,8 +54,10 @@ import {
   CorpusProjectedSourceSchema,
   CorpusProjectedSummarySchema,
   CorpusSourceSchema,
+  CorpusValidationErrorSchema,
   WRITE_SCOPE,
   corpusContentDigest,
+  corpusValidationErrorBody,
   isArtifactServable,
   ownerOnlyFilterFields,
   ownerOnlyFilterRefusal,
@@ -732,6 +734,21 @@ describe('corpus contract v1 -- error vocabulary', () => {
     expect(CORPUS_ERRORS.forbidden).toEqual({ status: 403, error: 'Forbidden' });
     expect(CORPUS_ERRORS.notFound).toEqual({ status: 404, error: 'NotFound' });
     expect(CORPUS_ERRORS.internal).toEqual({ status: 500, error: 'InternalError' });
+  });
+
+  // The service gate throws its refusal in `message`; a schema refusal answered
+  // only in `issues`, so the same rule reached a client two different ways.
+  it('states a schema refusal in message, not only in issues', () => {
+    const parsed = BuildCorpusRequestSchema.safeParse({
+      name: 'probe',
+      filter: { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+    });
+    expect(parsed.success).toBe(false);
+
+    const body = corpusValidationErrorBody(parsed.error?.issues ?? []);
+    expect(CorpusValidationErrorSchema.safeParse(body).success).toBe(true);
+    expect(body.message).toContain('filter.metadataMatch');
+    expect(body.message).toContain(ownerOnlyFilterRefusal(['metadataMatch']));
   });
 
   // The shared-scope bypass is the one genuinely dangerous failure mode in this

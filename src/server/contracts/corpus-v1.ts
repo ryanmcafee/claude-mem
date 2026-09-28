@@ -467,6 +467,48 @@ export const CORPUS_ERRORS = {
   internal: { status: 500, error: 'InternalError' },
 } as const;
 
+/** Zod's issue shape structurally, so a caller passes `error.issues` without retyping it. */
+export interface CorpusValidationIssue {
+  readonly message: string;
+  readonly path?: readonly PropertyKey[];
+}
+
+/**
+ * A 400 from schema parsing has to read like the 400 the service gate throws:
+ * both refuse the same combinations, and a client that learned the rule from
+ * `message` on one path found the field undefined on the other. `issues` stays
+ * for a client that wants the field path programmatically.
+ */
+export const CorpusValidationErrorSchema = z.object({
+  error: z.literal('ValidationError'),
+  message: z.string().min(1),
+  issues: z.array(z.unknown()),
+}).strict();
+
+export function corpusValidationErrorBody(issues: readonly CorpusValidationIssue[]): {
+  error: 'ValidationError';
+  message: string;
+  issues: readonly CorpusValidationIssue[];
+} {
+  // Grouped by text, because one refusal that names several fields raises an
+  // issue per field and would otherwise repeat its whole paragraph per field.
+  const pathsByText = new Map<string, string[]>();
+  for (const issue of issues) {
+    const path = (issue.path ?? []).map(String).join('.');
+    const paths = pathsByText.get(issue.message) ?? [];
+    pathsByText.set(issue.message, path.length > 0 ? [...paths, path] : paths);
+  }
+
+  const message = [...pathsByText]
+    .map(([text, paths]) => (paths.length > 0 ? `${paths.join(', ')}: ${text}` : text))
+    .join(' ');
+  return {
+    error: CORPUS_ERRORS.validation.error,
+    message: message.length > 0 ? message : 'Request failed validation',
+    issues,
+  };
+}
+
 /**
  * Which ceiling a CorpusTooLarge hit, so the client knows whether to narrow the
  * row count or the content volume -- the two need different fixes.
