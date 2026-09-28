@@ -21,6 +21,7 @@ import {
   type ImportWriteClient,
   type ImportWriteRequest,
 } from '../../src/services/import/sqlite-import.js';
+import { ServerImportWriteClient } from '../../src/cli/import-command.js';
 
 /**
  * Stands in for the central server's observations table: keyed by the same
@@ -177,6 +178,27 @@ describe('MCAA-241 — SQLite to central server import', () => {
     expect(content).toContain('Worker restart loop');
     expect(content).toContain('- ghost listener survived the parent');
     expect(content).toContain('Concepts:\n- worker lifecycle');
+  });
+
+  // ADR 0003 C5 — `created` stays optional on the wire so a new client against a
+  // server that predates the idempotency key sees `undefined`, not a wrong
+  // `false`. Coercing it (`created ?? false`) would report a duplicating import
+  // as a clean one, so the fallback counts the row as written and warns instead.
+  it('counts a response with no created flag as written and reports it', async () => {
+    const request: ImportWriteRequest = {
+      projectId: 'proj-homelab',
+      content: 'a row an old server accepted',
+      idempotencyKey: 'import:sqlite-v1:observations:no-flag',
+      metadata: {},
+    };
+
+    const oldServer = new ServerImportWriteClient(async () => ({}));
+    expect(await oldServer.addObservation(request)).toEqual({ created: true });
+    expect(oldServer.responsesWithoutCreatedFlag).toBe(1);
+
+    const currentServer = new ServerImportWriteClient(async () => ({ created: false }));
+    expect(await currentServer.addObservation(request)).toEqual({ created: false });
+    expect(currentServer.responsesWithoutCreatedFlag).toBe(0);
   });
 });
 

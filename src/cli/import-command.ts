@@ -27,8 +27,10 @@ import {
 const USAGE = `Usage: claude-mem import [options]
 
 Migrate a local SQLite claude-mem database into the configured central server.
-Re-running the same import adds nothing: every row carries a deterministic
-idempotency key, and the server reports repeats as already present.
+The import adds rows; it does not sync them. Re-running adds nothing: every row
+carries a deterministic idempotency key, and the server reports repeats as
+already present without comparing content, so edits made locally after the first
+import are not carried over.
 
 Options:
   --database <path>          Source database (default: the local claude-mem.db)
@@ -91,7 +93,7 @@ export function parseImportArgs(argv: string[]): ParsedImportArgs {
  * that predates MCAA-241 ignores the idempotency key, which makes a second
  * import duplicate rows instead of skipping them.
  */
-class ServerImportWriteClient implements ImportWriteClient {
+export class ServerImportWriteClient implements ImportWriteClient {
   responsesWithoutCreatedFlag = 0;
 
   constructor(
@@ -209,7 +211,8 @@ export async function runImportCommand(argv: string[]): Promise<number> {
 export function printImportSummary(result: SqliteImportResult): void {
   const line = (label: string, counts: SqliteImportCounts): string =>
     `  ${label.padEnd(18)} scanned ${counts.scanned}  imported ${counts.created}  `
-    + `already present ${counts.alreadyPresent}  skipped ${counts.skippedEmpty}  failed ${counts.failed}`;
+    + `already present (content not compared) ${counts.alreadyPresent}  `
+    + `skipped ${counts.skippedEmpty}  failed ${counts.failed}`;
   console.log(result.dryRun ? '\nImport (dry-run, nothing sent)' : '\nImport complete');
   console.log(line('observations', result.observations));
   console.log(line('session summaries', result.summaries));

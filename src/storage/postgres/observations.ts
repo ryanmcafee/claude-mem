@@ -348,9 +348,12 @@ export class PostgresObservationSourcesRepository {
  * Namespace for a caller-supplied idempotency key (MCAA-241). Client keys share
  * the `generation_key` column with the generation pipeline, so they are prefixed
  * separately: a client cannot craft a key that aliases a generated observation.
+ *
+ * Expects an already-trimmed key; the route schema owns that normalization so a
+ * whitespace-only key fails validation instead of collapsing into the prefix.
  */
 export function buildClientIdempotencyKey(clientKey: string): string {
-  return `client:v1:${clientKey.trim()}`;
+  return `client:v1:${clientKey}`;
 }
 
 export function buildObservationGenerationKey(input: {

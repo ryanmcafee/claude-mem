@@ -21,6 +21,13 @@ table, local session id and row id, and the server refuses to store the same key
 twice within a tenant. A second run reports the rows as already present and
 changes nothing.
 
+**The import adds rows; it does not sync them.** The key is derived from row
+identity and never from content, so the server answers a repeat with "already
+present" without comparing what the row now says. If you edit or regenerate a
+local observation after importing it, re-running the import will not carry that
+change across — the first version imported is the one the server keeps. Treat the
+import as a one-way move onto the central store, not as ongoing replication.
+
 ```sh
 export CLAUDE_MEM_SERVER_URL=https://claude-mem.example.com
 export CLAUDE_MEM_API_KEY=cm_...          # the API key IS the tenant binding
