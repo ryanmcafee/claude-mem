@@ -78,6 +78,11 @@ export interface SessionSummarySearchResult extends SessionSummaryRow {
 }
 
 export interface UserPromptSearchResult extends UserPromptRow {
-  rank?: number; 
-  score?: number; 
+  // Joined from sdk_sessions by searchUserPrompts; the id-hydration paths in
+  // SearchManager and ChromaSearchStrategy do not join, so these can be absent.
+  project?: string;
+  memory_session_id?: string;
+  platform_source?: string;
+  rank?: number;
+  score?: number;
 }
