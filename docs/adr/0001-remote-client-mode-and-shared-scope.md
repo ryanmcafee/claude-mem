@@ -109,6 +109,14 @@ deployment-specific branch of the storage layer (lens: **shared bones, not copie
 - **Ordering is not promised across requests.** Search results are ranked by text relevance then
   `updated_at`; `recent` is ordered by `created_at DESC`. There is no cross-client ordering
   guarantee, and none is needed by any consumer in this contract.
+- **A derived observation is never published.** Publishing is an explicit act on the write path:
+  only `POST /v1/memories` can set `shared`, and only behind the scope check. The generator's
+  `obsRepo.create` call in `processGeneratedResponse.ts` passes no `shared` field at all, so the
+  column default applies and a generated row is private by construction -- whatever the provider
+  returned, and whatever the event's session metadata claimed. The `observation.created` audit
+  entry records `shared` from the persisted row rather than from that input, so the audit log
+  reflects what landed. A caller cannot widen a derived row by sending shared-looking input to
+  `POST /v1/events`.
 
 ## Blast radius
 
@@ -430,6 +438,18 @@ migration path. The conditions below exist because deciding now is free and deci
   the surviving key set as an **exact set**, not as a list of absences, so a field added to the
   shared view later cannot pass silently. (PR #8 asserts the set that still includes `sharedOrigin`,
   plus that token's stability; MCAA-346 reduces both to the six-field set.)
+- `tests/server/generation/process-generated-response.test.ts` -- the derived-observation guarantee
+  above, pinned by two tests **named here on purpose**:
+  `keeps a per-event generated observation private despite shared-looking input` and
+  `keeps a session-summary generated observation private despite shared-looking input`. Each asserts
+  the persisted row, the returned object and the `observation.created` audit entry.
+  The file's other thirteen tests are unrelated to this decision, and PR #11/#12 rewrite that file's
+  whole harness (`pool.on('connect')` -> `createIsolatedSchema`/`poolForSchema`). Resolving that
+  conflict by taking either side wholesale compiles, passes, and deletes these two: the workflow
+  still names the file, so the gate stays green while the property stops being tested. **A merge
+  resolution that does not leave both names in the file is a regression of this decision regardless
+  of CI colour.** Verified 2026-09-28: fifteen `it(` on PR #8's branch, thirteen on `main`,
+  PR #11 and PR #12 -- the delta is exactly these two.
 - `tests/storage/shared-scope-migration.test.ts` -- forward DDL is idempotent and the
   `SHARED_SCOPE_DOWN_SQL` round trip restores the pre-change shape.
 - `tests/shared/remote-mode.test.ts` -- trigger precedence, including that an under-configured
@@ -437,4 +457,7 @@ migration path. The conditions below exist because deciding now is free and deci
 - `tests/shared/remote-mode-no-local-state.test.ts` -- no worker spawn and no local database open
   in remote mode.
 - `.github/workflows/ci.yml` runs the tenant-isolation job against a real Postgres, so the
-  isolation guarantee blocks the build.
+  isolation guarantee blocks the build. Both suites above must stay named in that job:
+  `process-generated-response.test.ts` was gated on `CLAUDE_MEM_TEST_POSTGRES_URL` that no job
+  supplied, so it reported green for months without ever executing. A gate whose failure mode is
+  silence is not a gate.
