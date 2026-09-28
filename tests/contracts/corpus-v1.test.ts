@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Compatibility tests for the remote corpus contract (docs/adr/0001).
+// Compatibility tests for the remote corpus contract (docs/adr/0002).
 //
 // These run with no Postgres and no server: the contract is data, so it can be
 // asserted directly. They exist to make three classes of change loud rather
@@ -24,6 +24,7 @@ import {
   CORPUS_MEMBER_ORDER,
   CORPUS_MEMBER_PREDICATES,
   CORPUS_OPERATION_SCOPES,
+  CORPUS_OWNER_ONLY_FILTER_FIELDS,
   CORPUS_PATHS,
   CorpusFilterSchema,
   CorpusRefSchema,
@@ -43,10 +44,25 @@ import {
   READ_SCOPE,
   SHARED_WRITE_SCOPE,
   SharedCorpusPrivateMembersSchema,
+  CORPUS_SOURCE_PROVENANCE_FIELDS,
+  CORPUS_PROVENANCE_FIELDS,
+  CorpusDetailSchema,
+  CorpusOwnerDetailSchema,
+  CorpusOwnerSourceSchema,
+  CorpusOwnerSummarySchema,
+  CorpusProjectedDetailSchema,
+  CorpusProjectedSourceSchema,
+  CorpusProjectedSummarySchema,
+  CorpusSourceSchema,
+  CorpusValidationErrorSchema,
   WRITE_SCOPE,
   corpusContentDigest,
+  corpusValidationErrorBody,
   isArtifactServable,
+  ownerOnlyFilterFields,
+  ownerOnlyFilterRefusal,
   parseCorpusScope,
+  ProjectableCorpusFilterSchema,
   type CorpusMemberIdentity,
   type CorpusToolName,
 } from '../../src/server/contracts/corpus-v1.js';
@@ -461,7 +477,8 @@ describe('corpus contract v1 -- response compatibility', () => {
   });
 
   it('reports a shared corpus and its member scope so a reader can tell provenance', () => {
-    const foreignShared = { ...summary, shared: true, memberScope: 'shared' as const, foreign: true };
+    const { projectId, filterDigest, ...base } = summary;
+    const foreignShared = { ...base, shared: true, memberScope: 'shared' as const, foreign: true };
     expect(CorpusSummarySchema.parse(foreignShared).foreign).toBe(true);
   });
 
@@ -548,6 +565,169 @@ describe('corpus contract v1 -- response compatibility', () => {
   });
 });
 
+// The corpus row itself carries provenance too: `projectId` names the owner's
+// project, and `filter`/`filterDigest` describe how they selected members.
+// Condition 13 omits all three on a non-owner read, so the schema has to be able
+// to express that response rather than reject it.
+describe('corpus contract v1 -- owner and projected corpora are mutually exclusive', () => {
+  const PROJECTED = {
+    id: 'corpus-1',
+    name: 'argocd',
+    description: 'ArgoCD rollbacks',
+    shared: true,
+    memberScope: 'shared' as const,
+    foreign: true,
+    stats: {
+      observationCount: 3,
+      matchedCount: 3,
+      truncated: false,
+      tokenEstimate: 1200,
+      kindBreakdown: { observation: 3 },
+      earliestAtEpoch: 1,
+      latestAtEpoch: 2,
+    },
+    contentDigest: 'sha256:bbb',
+    session_id: null,
+    builtAtEpoch: 3,
+    primedAtEpoch: 4,
+    createdAtEpoch: 1,
+    updatedAtEpoch: 5,
+  };
+  const OWNED = { ...PROJECTED, foreign: false, projectId: 'homelab', filterDigest: 'sha256:aaa' };
+
+  it('requires provenance on an owned corpus rather than accepting it as optional', () => {
+    expect(CorpusOwnerSummarySchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusOwnerSummarySchema.safeParse(PROJECTED).success).toBe(false);
+  });
+
+  it('accepts a projected corpus carrying no selection and no project id', () => {
+    expect(CorpusProjectedSummarySchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  it.each(CORPUS_PROVENANCE_FIELDS)('rejects %s on a projected corpus', (field) => {
+    const leaked = { ...PROJECTED, [field]: field === 'filter' ? { kinds: ['insight'] } : 'leaked' };
+    expect(CorpusProjectedSummarySchema.safeParse(leaked).success).toBe(false);
+    expect(CorpusProjectedDetailSchema.safeParse(leaked).success).toBe(false);
+  });
+
+  // Condition 13's response was previously unrepresentable: CorpusDetailSchema
+  // required `filter`, so omitting it failed the schema the server publishes.
+  it('represents a condition-13 detail response instead of failing its own schema', () => {
+    expect(CorpusProjectedDetailSchema.safeParse(PROJECTED).success).toBe(true);
+    expect(CorpusDetailSchema.safeParse(PROJECTED).success).toBe(true);
+    expect(CorpusOwnerDetailSchema.safeParse({ ...OWNED, filter: { kinds: ['insight'] } }).success).toBe(true);
+    expect(CorpusOwnerDetailSchema.safeParse(OWNED).success).toBe(false);
+  });
+
+  it('admits both variants through the response union', () => {
+    expect(CorpusSummarySchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusSummarySchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  // Half-projected is the shape a partial redaction produces: the union catches
+  // it because the owner variant requires every provenance field together.
+  it('rejects a half-projected corpus that keeps one provenance field', () => {
+    expect(CorpusSummarySchema.safeParse({ ...PROJECTED, projectId: 'homelab' }).success).toBe(false);
+    expect(CorpusSummarySchema.safeParse({ ...PROJECTED, filterDigest: 'sha256:aaa' }).success).toBe(false);
+    expect(CorpusDetailSchema.safeParse({ ...PROJECTED, filter: { kinds: ['insight'] } }).success).toBe(false);
+  });
+
+  // A projected corpus cannot carry owner member rows: that combination is the
+  // disclosure the split exists to make unstateable, not a shape to validate.
+  it('refuses an owner member row inside a projected corpus', () => {
+    const ownerRow = {
+      id: 'obs-1',
+      kind: 'insight',
+      content: 'argocd syncs from the apps/ directory',
+      shared: true,
+      position: 0,
+      createdAtEpoch: 1_700_000_000,
+      projectId: 'acme-internal-pki',
+      metadata: { agentId: 'agent-1' },
+    };
+    const { projectId, metadata, ...projectedRow } = ownerRow;
+    expect(CorpusProjectedDetailSchema.safeParse({ ...PROJECTED, sources: [ownerRow] }).success).toBe(false);
+    expect(CorpusProjectedDetailSchema.safeParse({ ...PROJECTED, sources: [projectedRow] }).success).toBe(true);
+  });
+});
+
+// A member row's provenance crosses a tenant boundary, so the schema -- not just
+// the serializer -- has to be able to say "this row was projected". Optional
+// provenance could not: an over-sharing projected row would still validate.
+describe('corpus contract v1 -- owner and projected member rows are mutually exclusive', () => {
+  const PROJECTED = {
+    id: 'obs-1',
+    kind: 'insight',
+    content: 'argocd syncs from the apps/ directory',
+    shared: true,
+    position: 0,
+    createdAtEpoch: 1_700_000_000,
+  };
+  const OWNED = { ...PROJECTED, projectId: 'homelab', metadata: { agentId: 'agent-1' } };
+
+  it('requires provenance on an owned row rather than accepting it as optional', () => {
+    expect(CorpusOwnerSourceSchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusOwnerSourceSchema.safeParse(PROJECTED).success).toBe(false);
+  });
+
+  it('accepts a projected row carrying content and citation handles only', () => {
+    expect(CorpusProjectedSourceSchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  // Condition 15: an exact key set, not a denylist. CORPUS_SOURCE_PROVENANCE_FIELDS
+  // catches a field we already decided to withhold; this catches the one nobody has
+  // argued about yet, including any replacement for the dropped `sharedOrigin`.
+  it('pins the projected key set exactly, so a new field cannot appear silently', () => {
+    expect(Object.keys(CorpusProjectedSourceSchema.shape).sort()).toEqual([
+      'content',
+      'createdAtEpoch',
+      'id',
+      'kind',
+      'position',
+      'shared',
+    ]);
+  });
+
+  // The owner variant is the projected set plus exactly the provenance it is
+  // allowed to add, so neither variant can grow a field the other never sees.
+  it('pins the owner key set as the projected set plus its provenance', () => {
+    const projected = Object.keys(CorpusProjectedSourceSchema.shape);
+    const owner = Object.keys(CorpusOwnerSourceSchema.shape);
+    expect(owner.filter(key => !projected.includes(key)).sort()).toEqual(['metadata', 'projectId']);
+    expect(projected.every(key => owner.includes(key))).toBe(true);
+  });
+
+  it('carries no provenance token under any name on a projected row', () => {
+    for (const key of Object.keys(CorpusProjectedSourceSchema.shape)) {
+      expect(key).not.toMatch(/origin|publisher|tenant|team|owner/i);
+    }
+  });
+
+  it.each(CORPUS_SOURCE_PROVENANCE_FIELDS)('rejects %s on a projected row', (field) => {
+    const leaked = { ...PROJECTED, [field]: field === 'metadata' ? { secret: true } : 'leaked' };
+    expect(CorpusProjectedSourceSchema.safeParse(leaked).success).toBe(false);
+  });
+
+  // teamId and serverSessionId were never in the corpus row shape. They are
+  // denied explicitly so adding them later cannot pass as an additive change.
+  it('denies teamId and serverSessionId on an owned row too', () => {
+    expect(CorpusOwnerSourceSchema.safeParse({ ...OWNED, teamId: 'team-1' }).success).toBe(false);
+    expect(CorpusOwnerSourceSchema.safeParse({ ...OWNED, serverSessionId: 's-1' }).success).toBe(false);
+  });
+
+  it('admits both variants through the response union', () => {
+    expect(CorpusSourceSchema.safeParse(OWNED).success).toBe(true);
+    expect(CorpusSourceSchema.safeParse(PROJECTED).success).toBe(true);
+  });
+
+  // Half-projected is the shape a per-corpus ownership test produces when it
+  // redacts one field and forgets the other.
+  it('rejects a half-projected row that keeps one provenance field', () => {
+    expect(CorpusSourceSchema.safeParse({ ...PROJECTED, projectId: 'homelab' }).success).toBe(false);
+    expect(CorpusSourceSchema.safeParse({ ...PROJECTED, metadata: {} }).success).toBe(false);
+  });
+});
+
 describe('corpus contract v1 -- error vocabulary', () => {
   it('reuses the server\'s existing error shapes', () => {
     expect(CORPUS_ERRORS.validation).toEqual({ status: 400, error: 'ValidationError' });
@@ -556,11 +736,159 @@ describe('corpus contract v1 -- error vocabulary', () => {
     expect(CORPUS_ERRORS.internal).toEqual({ status: 500, error: 'InternalError' });
   });
 
+  // The service gate throws its refusal in `message`; a schema refusal answered
+  // only in `issues`, so the same rule reached a client two different ways.
+  it('states a schema refusal in message, not only in issues', () => {
+    const parsed = BuildCorpusRequestSchema.safeParse({
+      name: 'probe',
+      filter: { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+    });
+    expect(parsed.success).toBe(false);
+
+    const body = corpusValidationErrorBody(parsed.error?.issues ?? []);
+    expect(CorpusValidationErrorSchema.safeParse(body).success).toBe(true);
+    expect(body.message).toContain('filter.metadataMatch');
+    expect(body.message).toContain(ownerOnlyFilterRefusal(['metadataMatch']));
+  });
+
   // The shared-scope bypass is the one genuinely dangerous failure mode in this
   // design (ADR "blast radius"), so it gets a named, distinguishable code.
   it('names the shared-corpus and size rejections distinctly as 422s', () => {
     expect(CORPUS_ERRORS.sharedPrivateMembers).toEqual({ status: 422, error: 'SharedCorpusPrivateMembers' });
     expect(CORPUS_ERRORS.tooLarge).toEqual({ status: 422, error: 'CorpusTooLarge' });
     expect(CORPUS_ERRORS.sharedPrivateMembers.error).not.toBe(CORPUS_ERRORS.tooLarge.error);
+  });
+});
+
+// Condition 14. The rule lives here rather than in the service so that selection,
+// counting and the build gate cannot hold three different ideas of which fields
+// test something a non-owner is not allowed to learn.
+describe('corpus contract v1 -- the selection oracle', () => {
+  it('names metadataMatch and platformSource, and only those, as owner-only', () => {
+    expect(CORPUS_OWNER_ONLY_FILTER_FIELDS).toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  it('reports a field only when the SQL would actually emit a clause for it', () => {
+    expect(ownerOnlyFilterFields({})).toEqual([]);
+    expect(ownerOnlyFilterFields({ metadataMatch: {} })).toEqual([]);
+    expect(ownerOnlyFilterFields({ platformSource: null })).toEqual([]);
+    expect(ownerOnlyFilterFields({ metadataMatch: { agentId: 'a' } })).toEqual(['metadataMatch']);
+    expect(ownerOnlyFilterFields({ platformSource: 'cursor' })).toEqual(['platformSource']);
+    expect(ownerOnlyFilterFields({ metadataMatch: { agentId: 'a' }, platformSource: 'cursor' }))
+      .toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  // kind, content and createdAtEpoch are on a projected row, so selecting on them
+  // tells a non-owner nothing the response withholds.
+  it('leaves the fields a projected member row already carries alone', () => {
+    expect(ownerOnlyFilterFields({
+      kinds: ['decision'],
+      query: 'rollback',
+      dateStartEpoch: 1,
+      dateEndEpoch: 2,
+      limit: 10,
+      scope: 'shared',
+    })).toEqual([]);
+  });
+
+  // The gate is only worth having if the response really withholds what these two
+  // fields test: `metadata` is denied outright, and no projected key describes the
+  // originating session that `platformSource` matches on.
+  it('withholds what each owner-only field tests', () => {
+    const projectedKeys = Object.keys(CorpusProjectedSourceSchema.shape);
+    expect(CORPUS_SOURCE_PROVENANCE_FIELDS).toContain('metadata');
+    expect(projectedKeys).not.toContain('metadata');
+    expect(projectedKeys.some(key => /session|platform/i.test(key))).toBe(false);
+  });
+});
+
+// Condition 22. The service gate stays the authority, but a rule only a runtime
+// 400 teaches is a rule an SDK generated from this contract does not have.
+describe('corpus contract v1 -- the refusal is in the contract', () => {
+  it('refuses a shared-scope filter on an owner-only field', () => {
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map(issue => issue.path.join('.'))).toEqual(['metadataMatch']);
+  });
+
+  it('reports every offending field, not just the first', () => {
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+      platformSource: 'cursor',
+    });
+    expect(parsed.error?.issues.map(issue => issue.path.join('.')))
+      .toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  // The schema and the service must refuse the same set or the contract
+  // describes a request the server accepts, or vice versa.
+  it('refuses exactly the filters ownerOnlyFilterFields names', () => {
+    const cases = [
+      {},
+      { metadataMatch: {} },
+      { platformSource: null },
+      { metadataMatch: { agentId: 'a' } },
+      { platformSource: 'cursor' },
+      { kinds: ['decision'], query: 'rollback', dateStartEpoch: 1, limit: 10 },
+    ];
+    for (const base of cases) {
+      const shared = { ...base, scope: 'shared' as const };
+      const expected = ownerOnlyFilterFields(shared).length === 0;
+      expect(ProjectableCorpusFilterSchema.safeParse(shared).success).toBe(expected);
+      // Project scope evaluates the same fields against the caller's own rows,
+      // where they disclose nothing, so it must stay accepted.
+      expect(ProjectableCorpusFilterSchema.safeParse({ ...base, scope: 'project' }).success).toBe(true);
+      expect(ProjectableCorpusFilterSchema.safeParse(base).success).toBe(true);
+    }
+  });
+
+  // ownerOnlyFilterFields treats '' as emitting no clause, but the structural
+  // schema never lets it through, so the gate is not what rejects it.
+  it('rejects an empty platformSource structurally, whatever the scope', () => {
+    for (const scope of ['project', 'shared'] as const) {
+      expect(ProjectableCorpusFilterSchema.safeParse({ scope, platformSource: '' }).success)
+        .toBe(false);
+      expect(CorpusFilterSchema.safeParse({ scope, platformSource: '' }).success).toBe(false);
+    }
+  });
+
+  it('carries the refusal into the build request body', () => {
+    const parsed = BuildCorpusRequestSchema.safeParse({
+      name: 'probe',
+      filter: { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path.join('.')).toBe('filter.metadataMatch');
+  });
+
+  it('states the same reason the runtime 400 states', () => {
+    const message = ownerOnlyFilterRefusal(['metadataMatch']);
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+    });
+    expect(parsed.error?.issues[0]?.message).toBe(message);
+    expect(message).toContain('scope "project"');
+  });
+
+  // A corpus built before the gate must stay readable and deletable, and its
+  // stored filter still round-trips through the structural schema. The purge,
+  // not a parse failure, is what stops it answering (condition 23).
+  it('leaves the structural schema unrefined so stored filters still parse', () => {
+    const stored = { scope: 'shared' as const, metadataMatch: { incidentId: 'INC-4471' } };
+    expect(CorpusFilterSchema.safeParse(stored).success).toBe(true);
+  });
+});
+
+// An MCP client reads the tool schema, not the zod schema, so the same rule has
+// to be visible there or an agent only learns it from a failed call.
+describe('corpus contract v1 -- build_corpus states the refusal in its tool schema', () => {
+  it.each(CORPUS_OWNER_ONLY_FILTER_FIELDS)('documents %s as unavailable with scope "shared"', (field) => {
+    const property = tool('build_corpus').inputSchema.properties[field] as { description: string };
+    expect(property.description).toContain('scope "shared"');
   });
 });

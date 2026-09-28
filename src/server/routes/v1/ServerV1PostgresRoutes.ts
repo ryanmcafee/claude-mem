@@ -34,6 +34,10 @@ import { PostgresServerSessionsRepository } from '../../../storage/postgres/serv
 import { IngestEventsService, type EnqueueOutcome } from '../../services/IngestEventsService.js';
 import { EndSessionService } from '../../services/EndSessionService.js';
 import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../../shared/platform-source.js';
+import { registerCorpusRoutes } from './CorpusV1Routes.js';
+import { CorpusService } from '../../services/CorpusService.js';
+import { createCorpusAnswererFromEnv, type CorpusAnswerer } from '../../services/CorpusAnswerer.js';
+import { createCorpusMcpBackend, type CorpusBackend } from '../../mcp/corpus-mcp-backend.js';
 
 const SOURCE_ADAPTER_DEFAULT = 'api';
 
@@ -72,6 +76,12 @@ export interface ServerV1PostgresRoutesOptions {
   // pick up — never claim observations were generated.
   getEventQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
   getSummaryQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
+  /**
+   * Model seam for `query_corpus`. Defaults to the same provider env the
+   * generation path uses; tests inject a stub so the corpus routes can be
+   * exercised without a provider.
+   */
+  corpusAnswerer?: CorpusAnswerer | null;
 }
 
 interface BatchPreValidationFailure {
@@ -127,8 +137,15 @@ async function waitForTerminalJob(
 export class ServerV1PostgresRoutes implements RouteHandler {
   private readonly ingestEvents: IngestEventsService;
   private readonly endSession: EndSessionService;
+  private readonly corpus: CorpusService;
 
   constructor(private readonly options: ServerV1PostgresRoutesOptions) {
+    this.corpus = new CorpusService({
+      pool: options.pool,
+      answerer: options.corpusAnswerer !== undefined
+        ? options.corpusAnswerer
+        : createCorpusAnswererFromEnv(),
+    });
     this.ingestEvents = new IngestEventsService({
       pool: options.pool,
       resolveEventQueue: () => this.resolveQueue('event') as never,
@@ -1088,7 +1105,21 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           return rows.map(serializeObservation);
         },
       };
-      const server = createRecallMcpServer(backend, MCP_SERVER_VERSION);
+      // MCAA-260 — the corpus tools share this transport, this key's team and
+      // this request's audit hook. Write tools are gated on the key's own
+      // scopes because /v1/mcp itself only requires memories:read.
+      const scopes = req.authContext?.scopes ?? [];
+      const corpusBackend: CorpusBackend = createCorpusMcpBackend({
+        service: this.corpus,
+        teamId,
+        projectScope,
+        assertProjectAllowed,
+        audit: (action, targetId, projectId, details) =>
+          this.auditWrite(req, action, targetId, projectId, details),
+        canWrite: scopes.includes('memories:write') || scopes.includes('*'),
+        canPublishShared: scopes.includes(SHARED_WRITE_SCOPE) || scopes.includes('*'),
+      });
+      const server = createRecallMcpServer(backend, MCP_SERVER_VERSION, corpusBackend);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on('close', () => {
         void transport.close();
@@ -1152,6 +1183,20 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         this.handleDbError(err, res, 'project.purge');
       }
     }));
+
+    // MCAA-260 — the remote corpus surface. Registered last so its routes sit
+    // behind the same auth, guards and audit helpers as everything above.
+    registerCorpusRoutes(app, {
+      service: this.corpus,
+      readAuth,
+      writeAuth,
+      requireTeamId: (req, res) => this.requireTeamId(req, res),
+      ensureProjectAllowed: (req, res, projectId) => this.ensureProjectAllowed(req, res, projectId),
+      ensureSharedWriteAllowed: (req, res) => this.ensureSharedWriteAllowed(req, res),
+      audit: (req, action, targetId, projectId, details) =>
+        this.auditWrite(req, action, targetId, projectId, details),
+      asyncHandler: (fn) => this.asyncHandler(fn),
+    });
   }
 
   // Phase 11 — resolve actor identity for audit. We look up the api_keys row

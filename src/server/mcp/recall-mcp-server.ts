@@ -21,6 +21,8 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '../../utils/logger.js';
+import { CORPUS_MCP_TOOLS } from '../contracts/corpus-v1.js';
+import { dispatchCorpusToolCall, type CorpusBackend } from './corpus-mcp-tools.js';
 
 export interface RecallBackend {
   // Returns serialized observations (already shaped by serializeObservation),
@@ -160,22 +162,51 @@ async function dispatchToolCall(
   throw new Error(`Unknown tool: ${name}`);
 }
 
+const CORPUS_TOOL_NAMES: ReadonlySet<string> = new Set(CORPUS_MCP_TOOLS.map(tool => tool.name));
+
+// The contract declares the tools `as const` so the golden test can freeze
+// their names and required arguments; widen them into the SDK's mutable Tool
+// shape here rather than asserting the type away.
+const CORPUS_TOOLS: Tool[] = CORPUS_MCP_TOOLS.map(tool => ({
+  name: tool.name,
+  description: tool.description,
+  inputSchema: {
+    type: 'object',
+    properties: { ...tool.inputSchema.properties },
+    required: [...tool.inputSchema.required],
+    additionalProperties: tool.inputSchema.additionalProperties,
+  },
+}));
+
 /**
- * Build a read-only recall MCP server bound to `backend`. The caller owns the
- * transport (stdio in the CLI, streamable-HTTP in Server Beta).
+ * Build the recall MCP server bound to `backend`. The caller owns the transport
+ * (stdio in the CLI, streamable-HTTP in Server Beta).
+ *
+ * `corpus` is optional: when supplied the server also advertises the corpus
+ * tools (MCAA-260). Unlike the recall tools these include writes, so a
+ * deployment that wants the pasted link to stay read-only simply omits it.
  */
-export function createRecallMcpServer(backend: RecallBackend, version: string): Server {
+export function createRecallMcpServer(
+  backend: RecallBackend,
+  version: string,
+  corpus?: CorpusBackend | null,
+): Server {
   const server = new Server(
     { name: 'claude-mem', version },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  const tools: Tool[] = corpus ? [...TOOLS, ...CORPUS_TOOLS] : TOOLS;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
+      if (CORPUS_TOOL_NAMES.has(name)) {
+        if (!corpus) throw new Error(`Unknown tool: ${name}`);
+        return jsonResult(await dispatchCorpusToolCall(corpus, name, args));
+      }
       return await dispatchToolCall(backend, name, args);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
