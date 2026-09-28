@@ -670,6 +670,35 @@ describe('corpus contract v1 -- owner and projected member rows are mutually exc
     expect(CorpusProjectedSourceSchema.safeParse(PROJECTED).success).toBe(true);
   });
 
+  // Condition 15: an exact key set, not a denylist. CORPUS_SOURCE_PROVENANCE_FIELDS
+  // catches a field we already decided to withhold; this catches the one nobody has
+  // argued about yet, including any replacement for the dropped `sharedOrigin`.
+  it('pins the projected key set exactly, so a new field cannot appear silently', () => {
+    expect(Object.keys(CorpusProjectedSourceSchema.shape).sort()).toEqual([
+      'content',
+      'createdAtEpoch',
+      'id',
+      'kind',
+      'position',
+      'shared',
+    ]);
+  });
+
+  // The owner variant is the projected set plus exactly the provenance it is
+  // allowed to add, so neither variant can grow a field the other never sees.
+  it('pins the owner key set as the projected set plus its provenance', () => {
+    const projected = Object.keys(CorpusProjectedSourceSchema.shape);
+    const owner = Object.keys(CorpusOwnerSourceSchema.shape);
+    expect(owner.filter(key => !projected.includes(key)).sort()).toEqual(['metadata', 'projectId']);
+    expect(projected.every(key => owner.includes(key))).toBe(true);
+  });
+
+  it('carries no provenance token under any name on a projected row', () => {
+    for (const key of Object.keys(CorpusProjectedSourceSchema.shape)) {
+      expect(key).not.toMatch(/origin|publisher|tenant|team|owner/i);
+    }
+  });
+
   it.each(CORPUS_SOURCE_PROVENANCE_FIELDS)('rejects %s on a projected row', (field) => {
     const leaked = { ...PROJECTED, [field]: field === 'metadata' ? { secret: true } : 'leaked' };
     expect(CorpusProjectedSourceSchema.safeParse(leaked).success).toBe(false);
