@@ -1,17 +1,18 @@
 # ADR 0001 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 3 -- provenance projection added; D3's disclosure
-  argument corrected)
-- Date: 2026-09-28 (revision 3; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 4 -- second review of D9 applied)
+- Date: 2026-09-28 (revisions 3-4; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
   "Second review" below for what each one changed.
-- Second reviewer, revision 3: Security & Secrets Engineer -- MCAA-348, requested.
-  D9 is a trust-boundary decision of the author's own and does not count as
-  reviewed until that verdict lands.
+- Second reviewer, revision 3: Security & Secrets Engineer -- MCAA-348,
+  *approve-with-conditions*, five blocking findings. All five are applied in
+  revision 4; see "Second review of D9" below. D9 is a trust-boundary decision of
+  the author's own, so it does not count as reviewed on his say-so.
 - Tracking: MCAA-259, parent MCAA-237. Revision 3 arises from the MCAA-345 review
-  of MCAA-260's implementation, against MCAA-281's observation projection.
+  of MCAA-260's implementation, against MCAA-281's observation projection;
+  revision 4 from MCAA-348's review of revision 3.
 - Machine-readable contract: [`src/server/contracts/corpus-v1.ts`](../../src/server/contracts/corpus-v1.ts)
 - Compatibility tests: [`tests/contracts/corpus-v1.test.ts`](../../tests/contracts/corpus-v1.test.ts)
 
@@ -613,21 +614,38 @@ The contract itself is versioned in code as `CORPUS_CONTRACT_VERSION = 1` in
 
 ### D9 -- Provenance is projected per member, at one shared boundary
 
-Added in revision 3. D3 establishes *what content* may cross a tenant boundary;
-this decides *what else travels with it*, and where that decision lives.
+Added in revision 3; revised in revision 4 from the MCAA-348 second review. D3
+establishes *what content* may cross a tenant boundary; this decides *what else
+travels with it*, and where that decision lives.
 
 **The rule.** Every observation a corpus surface returns or renders is projected by
 the same function the observation surfaces use, and the projection is decided **per
 member row**, against the reader, not per corpus:
 
 > A member row keeps full fidelity only when the reader owns it through their own
-> tenant predicate -- same `team_id` **and** same `project_id` as the read. Every
-> other row is reduced to published content plus `sharedOrigin`. `project_id`,
-> `metadata` and `serverSessionId` do not cross that boundary, in a JSON response
-> or in rendered artifact text.
+> tenant predicate -- the row's own `team_id` **and** `project_id` both match the
+> authorized read. Every other row is reduced to published content plus
+> `sharedOrigin`. `team_id`, `project_id`, `metadata` and `serverSessionId` do not
+> cross that boundary, in a JSON response or in rendered artifact text.
 
-Three things about that wording are the decision, and each of them is a mistake
-that was actually made:
+**The reader is an authorization result, not a request field.** Two definitions are
+in play in the reviewed implementation and they disagree: `loadMembers()` passes the
+*corpus's* project as the reader project, while the id-addressed routes pass
+`req.authContext?.projectId ?? ''` -- an empty string for a team-wide key. Neither
+is the reader. The reader is: the authenticated `team_id`, plus the project the key
+is *authorized for* -- its bound project for a project-scoped key, or the addressed
+project once authorized for a team-wide key. One definition, derived once, used by
+both the corpus-authorization check and the member projection, which stay separate
+decisions: being allowed to open a corpus says nothing about which of its members
+you own.
+
+**This is not computable today.** `PostgresCorpusMember` has no `teamId` and
+`listMembers()` does not `SELECT observations.team_id`. Per-member ownership needs
+that column carried through the member query and type; substituting the corpus's
+team is the defect, not a shortcut around it. Condition 10 starts there.
+
+Four things about the rule are the decision, and each of the first three is a
+mistake that was actually made:
 
 1. **Per member, not per corpus.** `foreign = corpus.team_id != caller.team_id` is
    the wrong test. `build_corpus` with `scope: 'shared'` admits other tenants'
@@ -647,31 +665,94 @@ that was actually made:
    imports it. Two copies of one redaction rule is the failure mode this ADR keeps
    naming: the copy someone forgets is the leak. This is the shared-bones rule
    applied inside a single service, and it is why condition 12 is a reuse
-   requirement rather than a behaviour requirement.
+   requirement rather than a behaviour requirement. Revision 3 said "whichever
+   branch merges second owns the convergence", which permits shipping a vulnerable
+   surface in the interim. Revision 4 orders it instead: the projection module
+   lands first, the corpus work rebases onto it, and the corpus surface is not
+   released until the cross-surface tests pass. `sharedOriginToken` is currently
+   module-private, so the import condition 12 asks for requires exporting it --
+   part of that same landing, not a separate negotiation.
+4. **Selection is a channel too.** Projecting the response is not enough.
+   `buildFilterClauses()` applies `metadataMatch` to foreign shared rows, so a
+   caller can filter *other tenants'* rows on a metadata predicate they were never
+   shown and read the answer out of `matchedCount`, `observationCount` or plain
+   membership -- an oracle over hidden metadata that survives a perfect
+   serializer. Private-metadata predicates apply only to owner-authorized rows;
+   a filter that would test foreign rows on hidden metadata is rejected rather
+   than evaluated, and selection and counting follow the same rule so the two
+   cannot disagree. `platformSource` gets the same treatment unless and until it
+   is explicitly classified as published information.
 
 **`sharedOrigin`, and why it must land before v1 ships.** A projected member row
-carries `sharedOrigin` -- MCAA-281's stable digest over `(team_id, project_id)`,
-truncated, imported rather than recomputed. Without it a reader cannot tell whether
-forty projected rows came from one publisher or forty, which is the grouping signal
-the observation surfaces already concede; withholding it on the corpus surface
-while granting it on search is the same divergence as (3).
+carries `sharedOrigin`, a stable per-publisher grouping token: without it a reader
+cannot tell whether forty projected rows came from one publisher or forty, which is
+the grouping signal the observation surfaces already concede, and withholding it on
+the corpus surface while granting it on search is the same divergence as (3).
+
+Revision 3 specified MCAA-281's construction -- a domain-separated SHA-256 over
+`team_id:project_id`, truncated to 16 hex characters. Revision 4 rejects that as
+the shipped form, on the second review's finding: 64 bits is ample against
+accidental collision but the input is not a secret. `project_id` is caller-supplied
+text, usually a repository or directory name, so once a reader knows or guesses a
+team the remaining search space is a wordlist, and a UUID in the input does not make
+a low-entropy sibling guessable-proof. A digest of guessable inputs is a pseudonym
+that can be confirmed, not a commitment.
+
+So the shipped token is a **persisted random 128-bit pseudonym per
+`(team_id, project_id)`**, minted on first use, stored, and shared by the
+observation and corpus surfaces. A keyed digest is an acceptable alternative only
+with an explicit key-custody and rotation design, which is a larger decision than
+this ADR should make in passing. Either way the token is pseudonymity with
+deliberate linkability -- never an authorization input, never a uniqueness
+guarantee, and never described as anonymous.
 
 It cannot be deferred. Every response schema in `corpus-v1.ts` is `.strict()`, so a
 consumer that pins the v1 schema **rejects** a response carrying a key the schema
 does not list. Under `.strict()`, adding a field is a breaking change for pinned
 consumers, not an additive one. The contract's "additive by default" default
 therefore does not apply to these schemas, and the full projected field set has to
-be right at v1 or wait for `corpus-v2.ts`.
+be right at v1 or wait for `corpus-v2.ts`. That argument settles *when* the field
+ships if it ships; it is not an argument that grouping is security-required.
+
+**Optional is the wrong shape; two schemas is the right one.** Revision 3 accepted
+MCAA-260's `projectId`/`metadata` narrowed to `.optional()`. Revision 4 does not.
+An optional sensitive field encodes "sometimes sent" and can only be checked by a
+test that remembers to assert absence; it cannot fail closed. The owner row and the
+projected row are different shapes, so the contract states them as **two mutually
+exclusive schemas** -- a projected source that carries `projectId`, `teamId` or
+`metadata` at all is a parse error, not a judgment call. `.strict()` then does the
+work the review would otherwise have to.
 
 **Corpus-level fields.** The corpus's own `name` and `description` stay -- they are
 author-chosen text on a row the author deliberately published, and revision 2
 already reasoned that through. `filter` does not: it is build-time configuration,
 never published content, and `filter.metadataMatch` carries the literal metadata
 keys *and values* the member projection just removed, which makes returning it a
-direct contradiction rather than a judgment call. On a foreign read, `filter` is
+direct contradiction rather than a judgment call. On a non-owner read, `filter` is
 omitted from the response and the render's system prompt drops `query`, `kinds` and
-`platformSource`. `filterDigest` stays: it is opaque, and it is the only handle a
-reader has for noticing that a corpus was rebuilt under them.
+`platformSource`.
+
+`filterDigest` does **not** stay, and revision 3's justification for it was wrong.
+Calling it opaque confused determinism with confidentiality: `corpusFilterDigest()`
+is an unkeyed hash of the whole canonical filter, and a filter is low-entropy
+configuration, so the digest is confirmable by guessing. It also does not do the job
+revision 3 claimed -- a rebuild over an unchanged filter produces the same digest,
+so it never was a rebuild signal. A non-owner read omits it; if a version handle is
+genuinely wanted there, it is a server-generated opaque revision id with no
+derivation from filter contents.
+
+**Derived values are projected too.** A number computed over unprojected input
+carries the input. `stats.tokenEstimate` is the clear case: it is stored at build
+time from a render that included every member's metadata, so handing it to a
+non-owner leaks a measurement of the text that was withheld. Non-owner statistics
+are recomputed from the projected member set. `contentDigest` is acceptable only
+when computed over the membership that reader is actually authorized to see.
+Observation `id` stays as a citation handle, on the condition that every
+dereference of it re-authorizes and that ids remain opaque at the write boundary
+(`newId()` is a random UUID, but the repository also accepts caller-supplied ids --
+that invariant belongs at the writer, not here). Exact timestamps plus stable ids
+permit cross-surface correlation and activity timing; that disclosure is accepted
+deliberately and recorded here, rather than justified by parity with search.
 
 **Versioning.** None of this bumps `CORPUS_CONTRACT_VERSION`. `corpus-v1.ts` has not
 shipped -- MCAA-259 is still an open PR, there is no released client, so the
@@ -679,11 +760,17 @@ shipped -- MCAA-259 is still an open PR, there is no released client, so the
 entire licence for narrowing required fields to optional, and it closes at the first
 release. After that, moving a field out of a response, or into one, is `corpus-v2.ts`.
 
-**Blast radius.** A missed projection leaks publisher identity, not content: which
-tenant and project authored knowledge that was already publishable, plus whatever
-the publisher's generators wrote into `metadata`. It does not disclose unshared
-content -- D3 still holds that line. It travels as far as any tenant with a read
-key, and it is not recoverable once served.
+**Blast radius.** Revision 3 called this "publisher identity, not content". That is
+too kind, and the second review was right to reject it. `metadata` is free-form
+publisher-controlled JSON: what a generator writes into it is unknown to this
+design, and it can carry private information outright. D3 protects the *bodies* of
+unshared observations; it says nothing about the confidentiality of metadata
+attached to a shared row. So a missed projection discloses publisher identity
+**plus arbitrary publisher-attached content of unknown sensitivity**, and the honest
+statement is that its severity is bounded by what publishers happen to put in
+`metadata` rather than by anything this ADR controls. It travels as far as any
+tenant holding a read key, and it is not recoverable once served. The one line D3
+still holds is that the *content* of an unshared observation does not cross.
 
 ## Consequences
 
@@ -795,38 +882,80 @@ guarantee this ADR claims.
    retyping them, so the compatibility tests guard the shipped surface.
 9. **A cross-tenant `:name` or `:corpusId` returns `404`, never `403`.**
 
-Conditions 10-13 are added in revision 3, from the MCAA-345 review of MCAA-260.
-They enforce D9.
+Conditions 10-16 enforce D9. Added in revision 3 from the MCAA-345 review of
+MCAA-260; 10, 12 and 13 rewritten and 14-16 added in revision 4 from the MCAA-348
+second review. All are gates on the **first release**, not deferred acceptance.
 
 10. **Decide the projection per member row, against the reader** -- never from a
-    per-corpus `foreign` flag. A row is owned only when its `team_id` *and*
-    `project_id` both match the read (`isOwnerAuthorizedView`). The test that proves
-    it is not "read another tenant's shared corpus": it is **build your own corpus
-    with `scope: 'shared'`, then read its sources**, and assert the foreign members
-    come back projected. That path needs no shared-write grant.
-    `tests/contracts/corpus-v1.test.ts` carries the schema half: a projected row
-    parses, an owner row parses, and a projected row with `projectId` or `metadata`
-    present is a contract violation the test names -- so "optional" cannot decay
-    into "sometimes sent".
+    per-corpus `foreign` flag. A row is owned only when the row's own `team_id`
+    *and* `project_id` match the authorized read (`isOwnerAuthorizedView`). Three
+    parts, all required:
+    - Carry `observations.team_id` through `listMembers()` and
+      `PostgresCorpusMember`. Neither has it today, so per-member ownership cannot
+      currently be evaluated at all; substituting the corpus's team is the defect.
+    - Derive the reader once -- authenticated team, plus the project the key is
+      authorized for (bound project for a project-scoped key; the addressed project
+      after authorization for a team-wide key). Today `loadMembers()` uses the
+      corpus's project and the id routes pass `''` for a team-wide key: two
+      competing ownership definitions, neither of them the reader. Keep corpus
+      authorization and member projection as separate decisions.
+    - Apply the same owner test to the corpus's own `projectId`, so a same-team
+      sibling-project read is projected like any other non-owner read.
+
+    The test that proves it is not "read another tenant's shared corpus": it is
+    **build your own corpus with `scope: 'shared'`, then read its sources**, and
+    assert the foreign members come back projected. That path needs no shared-write
+    grant.
 11. **Project the render, not just the JSON.** `corpus_artifacts` text is a by-value
     copy that `query` feeds to a model, so an unprojected render is the same leak
     one indirection further out. A corpus whose members are not all owner-authorized
     for the reader renders per reader and MUST NOT be read from or written to the
     artifact cache -- the cache key is the membership digest and carries no reader
-    dimension, so a cached owner render would otherwise be served verbatim. Keep
-    `prime`/`reprime` owner-only so the converse cannot happen either.
-12. **Import `serializeObservationForViewer` / `isOwnerAuthorizedView` /
-    `sharedOriginToken` from `src/server/routes/v1/observation-projection.ts`.** Do
-    not re-derive the rule in `CorpusService` or `corpus-render`. If the corpus row
-    shape genuinely needs to differ (it adds `position`; it has no
+    dimension, so a cached owner render would otherwise be served verbatim. This
+    covers `prime`, `reprime`, `query` and the system prompt, and it holds for an
+    **empty member set** too: "every member is owner-authorized" must not pass
+    vacuously and hand a non-owner the owner's cached prompt. Keep `prime`/`reprime`
+    owner-only so the converse cannot happen either.
+12. **One implementation, projection first.** Import
+    `serializeObservationForViewer` / `isOwnerAuthorizedView` / the origin-token
+    helper from `src/server/routes/v1/observation-projection.ts`; export the token
+    helper, which is module-private today. Do not re-derive the rule in
+    `CorpusService` or `corpus-render`, and do not ship a temporary second
+    redaction. Where the corpus row shape differs (it adds `position`, has no
     `serverSessionId`), extend that module -- including its deliberately empty
-    `SHARED_METADATA_ALLOWLIST` -- rather than forking it. Whichever of MCAA-260 and
-    MCAA-281 merges second owns the convergence.
-13. **Omit `filter` on a non-owner read**, and drop `query`, `kinds` and
-    `platformSource` from the render's system prompt on the same reads.
+    `SHARED_METADATA_ALLOWLIST` -- rather than forking it. Sequence: MCAA-281 lands,
+    MCAA-260 rebases onto it, cross-surface tests pass, then the corpus surface is
+    released.
+13. **Omit `filter` and `filterDigest` on a non-owner read**, and drop `query`,
+    `kinds` and `platformSource` from the render's system prompt on the same reads.
     `filter.metadataMatch` carries the exact metadata keys and values the member
-    projection removes; returning it undoes condition 10 in one field. Keep
-    `filterDigest`.
+    projection removes, so returning it undoes condition 10 in one field;
+    `filterDigest` is an unkeyed hash of low-entropy configuration, so it is
+    confirmable by guessing and was never the rebuild signal revision 3 claimed it
+    was. A version handle for non-owners, if wanted, is a server-generated opaque
+    revision id not derived from filter contents.
+14. **Close the selection oracle.** Apply `metadataMatch` only to owner-authorized
+    rows, or reject a filter that would test foreign rows on a metadata predicate
+    the caller cannot see; treat `platformSource` the same way. Selection and
+    counting must follow the identical rule, or `matchedCount` /
+    `observationCount` / bare membership answer the question the serializer
+    refused. The test: changing only hidden metadata on a foreign row must not
+    change any value a non-owner can observe.
+15. **`sharedOrigin` is a persisted random 128-bit pseudonym per
+    `(team_id, project_id)`**, minted once, stored, and shared by the observation and
+    corpus surfaces -- not a truncated digest of guessable inputs (D9 explains why
+    `project_id` is guessable and why a UUID in the input does not fix it). A keyed
+    construction is acceptable only with an explicit key-custody and rotation
+    design. Never an authorization input, never a uniqueness guarantee, never called
+    anonymous. Update the common helper and both contracts in the same change.
+16. **Owner and projected rows are two mutually exclusive schemas**, not one schema
+    with optional sensitive fields, and the same for derived values: a non-owner
+    `tokenEstimate` and the other statistics are recomputed from the projected
+    member set rather than reused from the build-time render, and `contentDigest` is
+    computed over the membership that reader is authorized to see.
+    `tests/contracts/corpus-v1.test.ts` asserts that a projected source carrying
+    `projectId`, `teamId` or `metadata` **fails to parse**, so "optional" cannot
+    decay into "sometimes sent" and the check fails closed.
 
 Recommended, not blocking: the `corpus_members(observation_id)` and
 `observations.metadata` GIN indexes in D1 (both are hot paths, not
@@ -874,3 +1003,27 @@ the finding should have said is that republishing discloses no content a shared
 search would not; the provenance question was not asked. D9 and conditions 10-13
 answer it. Recorded rather than quietly edited, because this ADR is what an
 implementer was reasoning from, and MCAA-260 implemented the sentence correctly.
+
+## Second review of D9
+
+MCAA-348, Security & Secrets Engineer: **approve-with-conditions**, five blocking
+findings. D9's per-member boundary and the revision-2 retraction were confirmed by
+source tracing at `77154737` / `d087e0a2` / `8b045f93`, including the republish
+reachability on an ordinary read/write key. Conditions 10-13 were judged *necessary
+but not sufficient*. What changed in revision 4:
+
+| Finding | Change |
+| --- | --- |
+| Reader and denied set both incomplete -- `team_id` not denied; `PostgresCorpusMember` has no `teamId` to compare, so the rule was not evaluable; `loadMembers()` and the id routes hold two competing reader definitions; condition 11 vacuous on an empty member set | `team_id` added to the denied set; D9 gains "the reader is an authorization result" and "this is not computable today"; condition 10 rewritten in three parts; condition 11 covers empty sets |
+| Metadata inference survives a correct serializer -- `metadataMatch` filters foreign rows on unseen predicates and the answer reads out of counts; `filterDigest` is an unkeyed hash of low-entropy config, and never was a rebuild signal | New D9 point 4 and new condition 14 (selection and counting follow the response rule); condition 13 now omits `filterDigest` too, with revision 3's "it is opaque" retracted |
+| `sharedOrigin` treats a UUID as a secret; 64-bit truncated digest over guessable `project_id` | D9 replaces the construction with a persisted random 128-bit per-`(team, project)` pseudonym; new condition 15 |
+| Derived values carry unprojected input -- `tokenEstimate` reuses a build-time render that included private metadata | D9 gains "derived values are projected too"; folded into condition 16, with the `id`-as-citation and timestamp-correlation disclosures stated explicitly instead of resting on parity with search |
+| `sharedOriginToken` is module-private so condition 12's import is impossible; "whichever merges second" permits an interim vulnerable surface; optional sensitive fields cannot fail closed | Condition 12 orders the landing (MCAA-281 first, corpus rebases, then release) and requires the export; condition 16 replaces optional fields with two mutually exclusive schemas and a test that a projected row carrying a denied field fails to parse |
+
+The blast-radius claim "publisher identity, not content" was rejected as too kind
+and is rewritten: `metadata` is free-form publisher JSON of unknown sensitivity, so
+severity is bounded by what publishers put there, not by this design. The decision
+to keep `CORPUS_CONTRACT_VERSION = 1` was accepted as consistent with D8 while the
+contract is genuinely unreleased, conditional on every prerelease consumer being
+updated before first release. No deployed exposure was established by either
+review; both are source-level.
