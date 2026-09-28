@@ -12,12 +12,16 @@ Conventions:
 - Records are append-only. Revisit a decision by adding a record that supersedes the old one;
   records are never edited to hide a decision that was actually taken.
 - A number belongs to one record, permanently.
-- A record that changes a wire contract or a schema names its compatibility tests.
+- A record that changes a wire contract or a schema names its compatibility tests. Name the test,
+  not only the file, when the same file also carries tests this decision does not own: a merge or a
+  harness rewrite can delete an assertion while the file keeps passing and the workflow keeps
+  naming it, and a list of filenames cannot tell you that happened.
 
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](./0001-remote-client-mode-and-shared-scope.md) | Remote client mode, tenant binding and opt-in shared scope | accepted |
 | [0002](./0002-remote-corpus-api-and-mcp-contract.md) | Remote corpus (knowledge-base) API and MCP contract | accepted |
+| [0003](./0003-client-supplied-idempotency-key-on-v1-memories.md) | A client-supplied idempotency key on `POST /v1/memories` | accepted |
 
 Each record reaches `main` with its own pull request, so a link above can be dead in a branch that
 does not yet carry that record. ADR 0002 was authored as `0001` on an unmerged branch and
