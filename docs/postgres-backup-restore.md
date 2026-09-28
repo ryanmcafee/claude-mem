@@ -7,8 +7,8 @@ deployment is derived or transient:
 | Store | Canonical? | On loss |
 | --- | --- | --- |
 | Postgres | yes | restore from a backup — this document |
-| Valkey / Redis (BullMQ) | no | in-flight generation jobs are re-enqueued from `observation_generation_jobs` |
-| Chroma | no | rebuilt from `observations` by re-running the sync/reindex path |
+| Valkey / Redis (BullMQ) | no | the queue is a transport. Every generation job also has a row in `observation_generation_jobs`, so its state survives in Postgres; jobs that were mid-flight may need re-queuing |
+| Chroma | not used by the server runtime | nothing to restore. The server's search is Postgres full-text over `observations.content_search` |
 
 Two paths are supported. The CloudNativePG Barman Cloud plugin is the primary
 path because it gives continuous WAL archiving and therefore point-in-time
@@ -167,9 +167,9 @@ Then, in order:
    ```
 3. Repoint the application. The chart reads Postgres credentials from
    `database.existingSecret`; set it to the restored cluster's `-app` Secret
-   (`claude-mem-pg-restored-app`) and redeploy the server and worker.
-4. Rebuild Chroma so search reflects the restored rows.
-5. Keep the failed cluster until the restore has been in production for a full
+   (`claude-mem-pg-restored-app`) and redeploy the server and worker. Search
+   needs no separate rebuild: it reads the restored `observations` rows.
+4. Keep the failed cluster until the restore has been in production for a full
    backup cycle.
 
 If the restored cluster must keep archiving (it should, once it is the live
@@ -270,7 +270,7 @@ psql -h HOST -U postgres -d claude_mem_restore_check -c \
           (SELECT count(*) FROM observations) AS observations"
 
 # 4. Cut over: point `database.existingSecret` at the verified database (or
-#    rename it into place during a maintenance window), redeploy, rebuild Chroma.
+#    rename it into place during a maintenance window) and redeploy.
 ```
 
 `pg_restore` must be at least the major version of the server that produced the
