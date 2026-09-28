@@ -28,6 +28,15 @@ function settle(ms = 500): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await settle(50);
+  }
+  return predicate();
+}
+
 afterAll(() => {
   for (const pid of strays) {
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
@@ -142,4 +151,60 @@ describe('identity revalidation never trusts the cache', () => {
 
     expect(after).toBe(before);
   });
+});
+
+/**
+ * "This PID does not resolve" must never be remembered.
+ *
+ * The cache exists so a repeated ownership check does not re-shell to CIM, but
+ * a NEGATIVE entry is a different thing entirely. Windows reissues a freed PID
+ * within milliseconds, so the entry is served to the REPLACEMENT process for
+ * the rest of the 5s TTL — and because isSameProcess() treats a null snapshot
+ * token as "proceed", the reuse guard switches itself off at the exact moment
+ * a reuse has happened. A caller that asks for a just-spawned process's
+ * identity gets null for a live process, which is how the 40-draw soak saw
+ * `expect(token).not.toBeNull()` fail on a root it had only just spawned.
+ *
+ * Deleting on a null read rather than merely skipping the write matters too:
+ * the entry cached while the PID was alive would otherwise outlive the process
+ * and be handed to the replacement as its identity.
+ */
+describe('the identity cache never remembers an unresolvable PID', () => {
+  it('re-probes the OS instead of serving a cached null (win32 branch)', () => {
+    // powershell.exe is absent on the POSIX runners, so the CIM lookup fails
+    // and this exercises the null path deterministically on every platform.
+    const originalPlatform = process.platform;
+    const probePid = 626262;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      expect(captureProcessStartToken(probePid)).toBeNull();
+
+      const before = __identityProbeCountForTesting();
+      expect(captureProcessStartToken(probePid)).toBeNull();
+      expect(__identityProbeCountForTesting()).toBeGreaterThan(before);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it.if(process.platform === 'win32')('retires a token cached while the PID was alive (Windows)', async () => {
+    const child = spawn('cmd.exe', ['/c', 'ping -n 60 127.0.0.1 > NUL'], { stdio: 'ignore', windowsHide: true });
+    const pid = child.pid!;
+    strays.push(pid);
+    await settle();
+
+    const liveToken = captureProcessStartToken(pid);
+    expect(liveToken).not.toBeNull();
+
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+
+    // isSameProcess bypasses the cache, so this polls the real process table
+    // and returns true once the PID stops resolving — and it is also the call
+    // that used to write the poisoned null entry.
+    expect(await waitUntil(() => isSameProcess(pid, 'not-this-processes-start-token'), 20_000)).toBe(true);
+
+    const before = __identityProbeCountForTesting();
+    expect(captureProcessStartToken(pid)).toBeNull();
+    expect(__identityProbeCountForTesting()).toBeGreaterThan(before);
+  }, 60_000);
 });
