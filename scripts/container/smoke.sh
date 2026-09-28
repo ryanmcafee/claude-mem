@@ -44,7 +44,9 @@ bash scripts/container/credentials-smoke.sh "$image"
 # The password is disposable test data, generated per invocation.
 name="claude-mem-smoke-$$"
 password=$(openssl rand -hex 24)
+health_response=$(mktemp)
 cleanup() {
+  rm -f "$health_response"
   docker rm -f "$name-worker" "$name-server" "$name-db" "$name-redis" >/dev/null 2>&1 || true
   docker network rm "$name" >/dev/null 2>&1 || true
 }
@@ -73,8 +75,11 @@ docker run --detach --name "$name-server" --network "$name" \
   --env CLAUDE_MEM_REDIS_URL=redis://redis:6379 --env CLAUDE_MEM_REDIS_MODE=docker \
   --env CLAUDE_MEM_GENERATION_DISABLED=true --env CLAUDE_MEM_CHROMA_ENABLED=false \
   "$image" >/dev/null
-for ((i=0; i<90; i++)); do
-  if docker exec "$name-server" curl -fsS http://127.0.0.1:37877/healthz; then
+health_deadline=$((SECONDS + 90))
+while ((SECONDS < health_deadline)); do
+  if docker exec "$name-server" curl --http1.1 --silent --show-error --include --max-time 2 http://127.0.0.1:37877/healthz > "$health_response"; then
+    # Retry transport startup only; an HTTP response must meet the contract.
+    python3 scripts/container/verify-health.py < "$health_response"
     echo 'Non-root, read-only HTTP runtime reached /healthz with Postgres and Valkey.'
 docker run --detach --name "$name-worker" --network "$name" \
   --read-only --cap-drop ALL --security-opt no-new-privileges \

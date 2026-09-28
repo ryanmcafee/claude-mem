@@ -36,6 +36,8 @@ jobs:
         run: python3 scripts/container/test-tree-sitter.py
       - name: Test private credential replacement
         run: python3 scripts/container/test-credentials.py
+      - name: Test HTTP health response gate
+        run: python3 scripts/container/test-health.py
       - name: Test artifact binding gate
         run: python3 scripts/container/test-archive.py
       - name: Validate release version

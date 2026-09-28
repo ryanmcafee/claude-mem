@@ -126,3 +126,10 @@ capability probe uses the SDK-required `--permission-mode dontAsk --version`;
 empty worker queues exercise startup without provider calls. CI retains structured
 scan reports and scanner/database metadata as `scan-amd64` / `scan-arm64`,
 including failed vulnerability scans. HIGH/CRITICAL findings remain blocking.
+
+The HTTP smoke requires HTTP/1.1 status 200, one JSON Content-Type header,
+and a JSON body with status=ok and runtime=server-beta. It retries transport
+startup within a 90-second deadline (each request capped at two seconds), but fails
+immediately on a nonconforming HTTP response; redirects are not followed.
+Run `python3 scripts/container/test-health.py` for offline positive/negative
+contract fixtures. This uses no credentials and works in forks.
