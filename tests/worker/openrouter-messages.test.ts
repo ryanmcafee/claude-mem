@@ -4,6 +4,7 @@ import { DatabaseManager } from '../../src/services/worker/DatabaseManager.js';
 import { SessionManager } from '../../src/services/worker/SessionManager.js';
 import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
 import type { ConversationMessage } from '../../src/services/worker-types.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 class TestOpenRouterProvider extends OpenRouterProvider {
   buildMessages(history: ConversationMessage[]) {
@@ -78,7 +79,7 @@ describe('OpenRouterProvider request guard', () => {
     }));
 
     const provider = new TestOpenRouterProvider({} as DatabaseManager, {} as SessionManager);
-    const fetchMock = mock(() => Promise.resolve(new Response(JSON.stringify({
+    const fetchMock = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       choices: [{ message: { content: 'ok' } }],
     }))));
 

@@ -7,6 +7,7 @@ import { DatabaseManager } from '../src/services/worker/DatabaseManager';
 import { SessionManager } from '../src/services/worker/SessionManager';
 import { ModeManager } from '../src/services/domain/ModeManager';
 import { SettingsDefaultsManager } from '../src/shared/SettingsDefaultsManager';
+import { mockFetch } from './helpers/fetch-mock';
 
 let rateLimitingEnabled = 'false';
 let queuedMessages: Array<Record<string, unknown>> = [];
@@ -60,7 +61,7 @@ function mockGeminiConfig() {
 }
 
 function mockSuccessfulGeminiFetch() {
-  global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+  global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
     candidates: [{ content: { parts: [{ text: 'response' }] } }]
   }))));
 }
@@ -202,7 +203,7 @@ describe('GeminiProvider', () => {
       startTime: Date.now(),
     } as any;
 
-    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+    global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       candidates: [{
         content: {
           parts: [{ text: '<observation><type>discovery</type><title>Test</title></observation>' }]
@@ -236,7 +237,7 @@ describe('GeminiProvider', () => {
       startTime: Date.now(),
     } as any;
 
-    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+    global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       candidates: [{ content: { parts: [{ text: 'response' }] } }]
     }))));
 
@@ -329,7 +330,7 @@ describe('GeminiProvider', () => {
     `;
 
     queuedMessages = [toolObservationMessage];
-    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+    global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       candidates: [{ content: { parts: [{ text: observationXml }] } }],
       usageMetadata: { totalTokenCount: 50 }
     }))));
@@ -362,7 +363,7 @@ describe('GeminiProvider', () => {
     queuedMessages = [toolObservationMessage];
     let resolveFetch!: (response: Response) => void;
     let sends = 0;
-    global.fetch = mock(() => {
+    global.fetch = mockFetch(() => {
       sends++;
       // Only the observation query is held open; the init query has to complete
       // for the message loop to reach it.
@@ -418,7 +419,7 @@ describe('GeminiProvider', () => {
       startTime: Date.now(),
     } as any;
 
-    global.fetch = mock(() => Promise.resolve(new Response('Resource has been exhausted (e.g. check quota).', { status: 429 })));
+    global.fetch = mockFetch(() => Promise.resolve(new Response('Resource has been exhausted (e.g. check quota).', { status: 429 })));
 
     await expect(agent.startSession(session)).rejects.toThrow(/429/);
   });
@@ -440,7 +441,7 @@ describe('GeminiProvider', () => {
       startTime: Date.now(),
     } as any;
 
-    global.fetch = mock(() => Promise.resolve(new Response('Invalid argument RAW_PROVIDER_BODY', { status: 400 })));
+    global.fetch = mockFetch(() => Promise.resolve(new Response('Invalid argument RAW_PROVIDER_BODY', { status: 400 })));
 
     // F4 classifyGeminiError surfaces 400 as a classified `unrecoverable` error
     // with a stable category rather than forwarding the raw upstream body.
@@ -472,7 +473,7 @@ describe('GeminiProvider', () => {
       startTime: Date.now(),
     } as any;
 
-    global.fetch = mock(() => Promise.resolve(new Response(rawBody, {
+    global.fetch = mockFetch(() => Promise.resolve(new Response(rawBody, {
       status: 418,
       headers: { 'x-goog-request-id': 'gemini-request-1' },
     })));
@@ -516,7 +517,7 @@ describe('GeminiProvider', () => {
         startTime: Date.now(),
       } as any;
 
-      global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+      global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] } }]
       }))));
 
@@ -564,7 +565,7 @@ describe('GeminiProvider', () => {
         startTime: Date.now(),
       } as any;
 
-      global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+      global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] } }],
         usageMetadata: { totalTokenCount: 10 }
       }))));
