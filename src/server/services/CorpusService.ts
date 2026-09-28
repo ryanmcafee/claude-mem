@@ -32,6 +32,7 @@ import {
   corpusContentDigest,
   isArtifactServable,
   ownerOnlyFilterFields,
+  ownerOnlyFilterRefusal,
   type BuildCorpusRequest,
   type CorpusFilter,
   type CorpusOwnerSummary,
@@ -425,10 +426,7 @@ export class CorpusService {
     if (fields.length === 0) return;
     throw new CorpusOperationError(CORPUS_ERRORS.validation.status, {
       error: CORPUS_ERRORS.validation.error,
-      message: `A shared-scope corpus cannot filter on ${fields.join(' or ')}. `
-        + 'That scope selects other tenants\' shared observations, whose '
-        + `${fields.join(' and ')} you never receive, so the member count would reveal them. `
-        + 'Drop the field, or use scope "project" to filter your own observations on it.',
+      message: ownerOnlyFilterRefusal(fields),
     });
   }
 
@@ -452,8 +450,11 @@ export class CorpusService {
 
   /**
    * Members as this caller may see them now. A foreign shared corpus resolves
-   * only its shared rows, which is safe by the D3 invariant: they are the same
-   * rows POST /v1/search { scope: 'shared' } would already return.
+   * only its shared rows. Their content is publishable, but their provenance is
+   * not: MCAA-281 redacts publisher identifiers from a cross-tenant shared read,
+   * so "search would return these rows anyway" no longer licenses returning them
+   * whole. Serialization still decides ownership once per corpus; ADR D9
+   * condition 12 moves it per member once the shared projection module lands.
    */
   private loadMembers(caller: CorpusCaller, corpus: PostgresCorpus): Promise<PostgresCorpusMember[]> {
     return this.repo.listMembers({
