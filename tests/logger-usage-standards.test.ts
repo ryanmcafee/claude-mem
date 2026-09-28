@@ -27,6 +27,7 @@ const EXCLUDED_PATTERNS = [
   /shared\/hook-io\.ts$/,  // Canonical hook-protocol IO module: console.log emits MODEL_CONTEXT JSON to stdout (plan 01 / #2292)
   /cli\/handlers\/user-message\.ts$/,  // User message handler uses console.error for user-visible context
   /services\/transcripts\/cli\.ts$/,  // CLI transcript subcommands use console.log for user-visible interactive output
+  /cli\/import-command\.ts$/,  // `claude-mem import` runs in the user's terminal and its report IS the output (MCAA-241)
   /services\/transcripts\/transcript-watcher-entry\.ts$/,  // CLI process entry point: console.error on fatal startup error goes to a visible stderr (own process, not a background service)
   /npx-cli\/commands\//,  // npx CLI subcommands (install/uninstall/runtime/server/etc) emit user-visible terminal output
   /npx-cli\/install\//,  // npx CLI install-time modules (error-reporter/setup-runtime/etc) emit user-visible terminal output during `npx claude-mem install`
