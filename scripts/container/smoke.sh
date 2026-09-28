@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+image=${1:?Usage: scripts/container/smoke.sh IMAGE}
+# Use the production entrypoint with precisely the chart's writable mounts.
+# No credentials, provider traffic, or metered API calls are needed.
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,uid=1000,gid=1000,mode=1777 \
+  --tmpfs /home/node/.claude:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /home/node/.claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /data/claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --env CLAUDE_MEM_CONTAINER_MODE=shell "$image" bash -euo pipefail -c '
+    test "$(id -u)" = 1000
+    for tool in cc gcc g++ make npm npx yarn yarnpkg; do
+      if command -v "$tool"; then echo "Unexpected build tool in runtime: $tool" >&2; exit 1; fi
+    done
+    for path in /tmp /home/node/.claude /home/node/.claude-mem /data/claude-mem; do
+      touch "$path/.writable-probe"
+    done
+    if touch /opt/claude-mem/.immutable-probe 2>/dev/null; then
+      echo "Application installation must be immutable" >&2; exit 1
+    fi
+    test "$(bun --version)" = 1.3.12
+    node --version
+    claude --permission-mode dontAsk --version | grep -F 2.1.283
+    git --version
+    curl --version
+    rg --version
+    apk info -v
+    cd /opt/claude-mem
+    ./node_modules/.bin/tree-sitter --version
+    node -e "const Parser = require(\"tree-sitter\"); const p = new Parser(); p.setLanguage(require(\"tree-sitter-javascript\")); const t = p.parse(\"const answer = 42;\"); if (t.rootNode.hasError) throw Error(t.rootNode.toString()); console.log(t.rootNode.toString());"
+    cd /home/node
+    # Config mutation requires no login/provider call and catches writes to
+    # ~/.claude.json outside the mounted config directory.
+    claude mcp add --scope user readonly-smoke -- echo smoke
+    test -s "$CLAUDE_CONFIG_DIR/.claude.json"
+    # Execute the bundled CLI to catch missing native/runtime dependencies.
+    bun /opt/claude-mem/scripts/server-service.cjs status
+  '
+
+bash scripts/container/credentials-smoke.sh "$image"
+
+# Exercise actual HTTP startup and Postgres migrations under the same mounts.
+# The password is disposable test data, generated per invocation.
+name="claude-mem-smoke-$$"
+password=$(openssl rand -hex 24)
+health_response=$(mktemp)
+cleanup() {
+  rm -f "$health_response"
+  docker rm -f "$name-worker" "$name-server" "$name-db" "$name-redis" >/dev/null 2>&1 || true
+  docker network rm "$name" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create "$name" >/dev/null
+docker run --detach --name "$name-db" --network "$name" --network-alias db \
+  --env POSTGRES_USER=smoke --env POSTGRES_DB=smoke --env POSTGRES_PASSWORD="$password" \
+  postgres:17-alpine >/dev/null
+docker run --detach --name "$name-redis" --network "$name" --network-alias redis \
+  valkey/valkey:8-alpine valkey-server --maxmemory-policy noeviction >/dev/null
+ready=false
+for ((i=0; i<60; i++)); do
+  if docker exec "$name-db" pg_isready -U smoke -d smoke >/dev/null 2>&1; then ready=true; break; fi
+  sleep 1
+done
+if [[ "$ready" != true ]]; then echo 'Smoke Postgres did not become ready in 60s' >&2; exit 1; fi
+docker run --detach --name "$name-server" --network "$name" \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,uid=1000,gid=1000,mode=1777 \
+  --tmpfs /home/node/.claude:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /home/node/.claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /data/claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --env CLAUDE_MEM_SERVER_HOST=0.0.0.0 --env CLAUDE_MEM_SERVER_PORT=37877 \
+  --env CLAUDE_MEM_QUEUE_ENGINE=bullmq --env CLAUDE_MEM_AUTH_MODE=api-key \
+  --env CLAUDE_MEM_SERVER_DATABASE_URL="postgres://smoke:$password@db:5432/smoke" \
+  --env CLAUDE_MEM_REDIS_URL=redis://redis:6379 --env CLAUDE_MEM_REDIS_MODE=docker \
+  --env CLAUDE_MEM_GENERATION_DISABLED=true --env CLAUDE_MEM_CHROMA_ENABLED=false \
+  "$image" >/dev/null
+health_deadline=$((SECONDS + 90))
+while ((SECONDS < health_deadline)); do
+  if docker exec "$name-server" curl --http1.1 --silent --show-error --include --max-time 2 http://127.0.0.1:37877/healthz > "$health_response"; then
+    # Retry transport startup only; an HTTP response must meet the contract.
+    python3 scripts/container/verify-health.py < "$health_response"
+    echo 'Non-root, read-only HTTP runtime reached /healthz with Postgres and Valkey.'
+docker run --detach --name "$name-worker" --network "$name" \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,uid=1000,gid=1000,mode=1777 \
+  --tmpfs /home/node/.claude:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /home/node/.claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --tmpfs /data/claude-mem:rw,nosuid,nodev,uid=1000,gid=1000 \
+  --env CLAUDE_MEM_SERVER_HOST=0.0.0.0 --env CLAUDE_MEM_SERVER_PORT=37877 \
+  --env CLAUDE_MEM_QUEUE_ENGINE=bullmq --env CLAUDE_MEM_AUTH_MODE=api-key \
+  --env CLAUDE_MEM_SERVER_DATABASE_URL="postgres://smoke:$password@db:5432/smoke" \
+  --env CLAUDE_MEM_REDIS_URL=redis://redis:6379 --env CLAUDE_MEM_REDIS_MODE=docker \
+  --env CLAUDE_MEM_CONTAINER_MODE=worker --env CLAUDE_MEM_CHROMA_ENABLED=false \
+  "$image" >/dev/null
+    for ((j=0; j<60; j++)); do
+      if docker logs "$name-worker" 2>&1 | grep -F '"status":"worker-running"'; then
+        test "$(docker inspect --format '{{.State.Running}}' "$name-worker")" = true
+        echo 'Offline generation worker started on empty queues; no provider request submitted.'
+        exit 0
+      fi
+      if [[ $(docker inspect --format '{{.State.Running}}' "$name-worker") != true ]]; then break; fi
+      sleep 1
+    done
+    docker logs "$name-worker" >&2
+    echo 'Generation worker failed to start against disposable Postgres/Valkey.' >&2
+    exit 1
+  fi
+  if [[ $(docker inspect --format '{{.State.Running}}' "$name-server") != true ]]; then break; fi
+  sleep 1
+done
+docker logs "$name-server" >&2
+echo 'Read-only runtime failed /healthz; inspect startup errors above and writable mounts in docker/claude-mem/README.md.' >&2
+exit 1
