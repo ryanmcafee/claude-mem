@@ -485,8 +485,26 @@ migration path. The conditions below exist because deciding now is free and deci
   Stated limits, so nobody reads the guard as wider than it is. `it.each`/`test.each` titles are
   computed at runtime and invisible to a source scan, so the inventory is a floor. It catches a
   deleted assertion, not a relocated one: a guard re-applied to the wrong function removes no title
-  and stays green (MCAA-394). And a rename reads as a removal plus an addition, so a deliberate one
-  has to be declared.
+  and stays green. A rename reads as a removal plus an addition, so a deliberate one has to be
+  declared.
+
+  The fourth limit is scope, and it is the one a reader is most likely to infer past.
+  `check-test-name-removals.ts` inspects only suites that already exist at the merge base and carry
+  a gate marker: it diffs with `--diff-filter=MDR`, skips any path with no base blob, and skips any
+  path neither the base nor the head source marks with a `CLAUDE_MEM_TEST_*` gate. Deleting a whole
+  gated suite is still caught -- the head source reads empty and every title is reported -- but a
+  suite that arrives new on a branch is never inspected at all. That is correct by construction,
+  since a file with no base side cannot have lost a title. Its consequence is not: a green
+  `dropped-test guard (gated suites)` is evidence about edited, renamed and deleted gated suites,
+  and is not assurance that a rebase preserved every test in the tree.
+
+  Both suites this decision names are on `main` and gated, so this decision's own compatibility
+  tests are in scope. MCAA-394's is the case that is not, and it fails the guard's preconditions
+  three times over rather than once: its suite is absent from `main`, it reads no
+  `CLAUDE_MEM_TEST_*` because it drives a fake queryable, and its defect relocates a guard statement
+  without removing a title. Adding the named `createIfAbsent` test does not bring it under this
+  check -- that resolution is verified by hand. Recording the three causes because a reader who
+  knows only the relocation one will conclude that a test fixes it.
 
   **The two ways to declare a removal are not equivalent, and only one of them may be used on the
   two titles named above.** `check-test-name-removals.ts` computes
