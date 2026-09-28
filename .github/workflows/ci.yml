@@ -60,6 +60,44 @@ jobs:
       - name: Test (openclaw)
         run: bun test openclaw
 
+  # Taking one side of a conflicted test file wholesale compiles, keeps the file,
+  # and keeps the suite green with fewer assertions — the `postgres-suites` job
+  # still runs the file and still passes (MCAA-395). Both confirmed instances were
+  # caught only by simulating the merge order by hand, so this job compares each
+  # changed gated suite's test titles against the merge base instead.
+  dropped-test-guard:
+    name: dropped-test guard (gated suites)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The merge-base comparison needs real history, which the default shallow
+      # clone does not have.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # The title inventory is parsed with the TypeScript compiler, so a
+      # conditional `it.skip` or a curried `it.each` is counted the same as a
+      # plain `it` — a grep over the diff misses both.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Fetch the base branch
+        run: git fetch --no-tags --quiet origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      # PR_LABELS carries the JSON array Actions renders from labels.*.name; the
+      # script parses it, because an empty label list is not valid fromJson input.
+      - name: Dropped-test guard
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: npm run lint:test-removals
+
   # #3482 was first characterised as a Windows bug, but a bare SIGKILL on the
   # stale worker orphans the identical uvx -> uv -> python chain on POSIX (the
   # descendants re-parent to init instead of surviving a single-PID
