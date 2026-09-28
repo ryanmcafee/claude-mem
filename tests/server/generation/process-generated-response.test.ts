@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import pg from 'pg';
+import type pg from 'pg';
 import {
   bootstrapServerPostgresSchema,
   createPostgresStorageRepositories,
-  type PostgresPoolClient,
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
 import {
@@ -14,7 +13,7 @@ import {
   markGenerationFailed,
 } from '../../../src/server/generation/processGeneratedResponse.js';
 import { ModeManager } from '../../../src/services/domain/ModeManager.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
@@ -24,10 +23,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     return;
   }
 
-  // A pooled connection keeps its session search_path after release, so a pool
-  // shared across tests hands back connections pointing at a dropped schema.
   let pool: pg.Pool;
-  let client: PostgresPoolClient;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
   let teamId: string;
@@ -39,13 +35,10 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     // The generation path reads the active ModeManager mode; load it so this
     // file runs standalone instead of relying on another test file's side effect.
     ModeManager.getInstance().loadMode('code');
-    pool = new pg.Pool({ connectionString: testDatabaseUrl });
-    client = await pool.connect();
-    schemaName = `cm_phase5_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
-    await bootstrapServerPostgresSchema(client);
-    storage = createPostgresStorageRepositories(client);
+    schemaName = await createIsolatedSchema(testDatabaseUrl, 'cm_phase5');
+    pool = poolForSchema(testDatabaseUrl, schemaName);
+    await bootstrapServerPostgresSchema(pool);
+    storage = createPostgresStorageRepositories(pool);
 
     const team = await storage.teams.create({ name: 'team-a' });
     const project = await storage.projects.create({ teamId: team.id, name: 'proj-a' });
@@ -71,23 +64,11 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       jobType: 'observation_generate_for_event',
     });
     jobId = job.id;
-
-    // processGeneratedResponse opens its own transactions on the pool, so every
-    // further connection needs the test schema too.
-    pool.on('connect', (poolClient) => {
-      poolClient.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
   });
 
   afterEach(async () => {
-    if (client) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } catch {}
-      client.release();
-    }
-    pool.removeAllListeners('connect');
     await pool.end();
+    await dropSchema(testDatabaseUrl, schemaName);
   });
 
   async function reloadJob() {
@@ -576,7 +557,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     `;
 
     async function auditSharedFlags(observationId: string): Promise<Array<boolean | undefined>> {
-      const audit = await client.query<{ details: { shared?: boolean } }>(
+      const audit = await pool.query<{ details: { shared?: boolean } }>(
         `SELECT details FROM audit_log
          WHERE action = 'observation.created' AND resource_id = $1`,
         [observationId],
@@ -601,7 +582,7 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       expect(outcome.observations[0]!.shared).toBe(false);
       expect(await auditSharedFlags(outcome.observations[0]!.id)).toEqual([false]);
 
-      const stored = await client.query<{ shared: boolean }>(
+      const stored = await pool.query<{ shared: boolean }>(
         'SELECT shared FROM observations WHERE id = $1',
         [outcome.observations[0]!.id],
       );
