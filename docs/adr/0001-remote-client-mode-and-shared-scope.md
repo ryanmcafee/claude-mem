@@ -262,10 +262,11 @@ opposite direction -- an owner's render served *to* a foreign reader -- not a fo
 provenance entering an owner's render. Remediation is therefore code **plus** a purge of
 already-primed artifacts.
 
-Nothing is deployed: no manifest mints a `memories:write:shared` key, so no cross-tenant shared row
-exists anywhere to leak (the same fact that carries the ratification below). This is a design defect
-with no live exposure, and the reason it is still merge-blocking is that the data precondition is
-exactly what MCAA-286 turns on. The contract's own justification for the field set --
+No cross-tenant shared row exists yet, so there is nothing to leak today -- see "The precondition
+that holds the door shut" below for what that claim actually rests on, which is narrower than a
+reading of the chart templates. This is a design defect with no live exposure, and the reason it is
+still merge-blocking is that the data precondition is exactly what MCAA-286 turns on. The contract's
+own justification for the field set --
 "the same rows `POST /v1/search { scope: 'shared' }` would return", `corpus-v1.ts` -- is now false
 and must be corrected with the code.
 
@@ -279,6 +280,36 @@ both shape and subject.
 - **The subject of the test.** The corpus path tests who owns the *corpus*; the projection tests the
   *row* -- team **and** project, because a same-team row outside the queried project also arrived
   through the shared branch. Only the row-level test is sound for a mixed-provenance member set.
+
+## The precondition that holds the door shut (stated exactly)
+
+Both the corpus finding above and the ratification below rest on "no cross-tenant shared row exists
+yet." Earlier revisions of this record stated that as *no manifest mints a `memories:write:shared`
+key*. That is necessary but not sufficient, and it points a reader at the wrong check:
+`ensureSharedWriteAllowed` returns true for **either** `memories:write:shared` **or** a bare `*`
+(`ServerV1PostgresRoutes.ts:1340`), so a wildcard key issued for some unrelated reason can publish
+`shared: true` today with no curator key in existence anywhere.
+
+Stated exactly:
+
+> No key bearing `memories:write:shared` **or** `*` has published a shared row.
+
+That is a claim about the keys actually issued, verified by an inventory check, not by reading chart
+templates. It belongs to the enablement gate (MCAA-286), which already owns the wildcard condition
+(condition 3 above). It is also why the "remediation includes purging `corpus_artifacts`"
+consequence can bite earlier than the manifest reading suggests: the reachability does not wait for
+a curator key to be minted.
+
+The read side is not symmetric, and that asymmetry is checked rather than assumed: `*` does not
+widen a read across tenants. Reading shared rows still requires an explicit `scope: "shared"` or
+`CLAUDE_MEM_INCLUDE_SHARED`, and the one wildcard-sensitive read branch (`include=payload` on
+`GET /v1/jobs`) still resolves `teamId` from the key rather than the request. The publish path is
+the only one a wildcard key widens.
+
+Lens: **delivery-guarantee honesty**, applied to a security precondition rather than a message one.
+A precondition written one notch stronger than the code enforces reads as a guarantee, and is not
+one. Credit to the Workflow & Eventing Engineer, who caught this in the severity statement of the
+corpus ruling above.
 
 ## Ratification: reducing the cross-tenant row is not a breaking change
 
@@ -295,17 +326,22 @@ convenience of the change, carry this:
 1. **The owner view is byte-identical.** The projection diverges from the pre-change serializer
    only on the non-owner branch; the ten owner-view fields are the same fields in the same order.
    Every read that has ever returned data in any deployment is unaffected.
-2. **The changed branch has never been reachable.** Publishing a shared row requires the
-   `memories:write:shared` grant, and no chart or manifest exists anywhere in the repository to
-   mint a key carrying it. Reading shared rows requires an explicit `scope: "shared"` or
-   `CLAUDE_MEM_INCLUDE_SHARED`, which resolves falsy when unset. No deployment has ever published a
-   shared row or read one.
+2. **No consumer of the changed branch can exist.** The branch only returns data to a caller that
+   asked for it: an explicit `scope: "shared"` on the request, or `CLAUDE_MEM_INCLUDE_SHARED`, which
+   resolves falsy when unset. Nothing widens that read implicitly -- notably not a wildcard key, per
+   the section above -- so the set of callers that have ever seen a cross-tenant row is bounded by an
+   opt-in nobody has taken, and no chart exists to take it.
 
-"Backward compatibility by default" protects a consumer you cannot see and cannot redeploy. Here
-the code path that would have produced the data has never been switched on, so the set of possible
-consumers is empty -- this is the first definition of the shared-row shape, not a reduction of a
-shipped one. The test that pinned `teamId` was asserting the behaviour of an unreachable branch,
-which is why correcting it is the right move rather than a contract violation.
+   This deliberately rests on the **read** opt-in rather than on the publish grant. An earlier
+   revision argued it from the absence of a minted `memories:write:shared` key; that argument is
+   weaker than it looked, because a wildcard key can publish. The read opt-in is the property that
+   actually bounds the consumer set, and it is unaffected by key inventory.
+
+"Backward compatibility by default" protects a consumer you cannot see and cannot redeploy. Here the
+code path that would have *delivered* the data to any caller has never been switched on, so the set
+of possible consumers is empty -- this is the first definition of the shared-row shape, not a
+reduction of a shipped one. The test that pinned `teamId` was asserting the behaviour of a branch no
+caller had opted into, which is why correcting it is the right move rather than a contract violation.
 
 **This window closes at the enablement gate.** Once MCAA-286 enables the shared scope in a real
 deployment, the shape above becomes a shipped contract and any later removal needs a version and a
