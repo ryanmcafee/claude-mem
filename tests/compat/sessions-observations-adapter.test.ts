@@ -21,9 +21,30 @@ import {
 } from '../../src/storage/postgres/index.js';
 import { DisabledServerQueueManager } from '../../src/server/runtime/types.js';
 import { logger } from '../../src/utils/logger.js';
+import { readJson } from '../helpers/http-json.js';
 import { quoteIdentifier, newApiKey } from '../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
+
+interface CompatObservationsResponse {
+  status: string;
+  observationCount: number;
+  serverSessionId: string;
+  eventId: string;
+  transport: string;
+}
+
+interface CompatSummarizeResponse {
+  status: string;
+  reason?: string;
+  serverSessionId: string;
+  generationJobId: string;
+  transport: string;
+}
+
+interface CompatErrorResponse {
+  error: string;
+}
 
 describe('Phase 9 compat adapters', () => {
   if (!testDatabaseUrl) {
@@ -175,7 +196,7 @@ describe('Phase 9 compat adapters', () => {
       }),
     });
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body = await readJson<CompatObservationsResponse>(response);
     // Legacy clients only check `status`; new clients can read the rest.
     expect(body.status).toBe('queued');
     expect(body.observationCount).toBe(1);
@@ -228,7 +249,7 @@ describe('Phase 9 compat adapters', () => {
       }),
     });
     expect(response.status).toBe(400);
-    const body = await response.json();
+    const body = await readJson<CompatErrorResponse>(response);
     expect(body.error).toBe('BadRequest');
     expect(enqueuedEventJobs.length).toBe(0);
   });
@@ -242,7 +263,7 @@ describe('Phase 9 compat adapters', () => {
         cwd: '/x',
       }),
     });
-    const b1 = await r1.json();
+    const b1 = await readJson<CompatObservationsResponse>(r1);
 
     const r2 = await authedFetch(projectScopedApiKey, '/api/sessions/observations', {
       method: 'POST',
@@ -252,7 +273,7 @@ describe('Phase 9 compat adapters', () => {
         cwd: '/x',
       }),
     });
-    const b2 = await r2.json();
+    const b2 = await readJson<CompatObservationsResponse>(r2);
 
     expect(b1.serverSessionId).toBe(b2.serverSessionId);
     const sessionRows = await client.query(
@@ -273,7 +294,7 @@ describe('Phase 9 compat adapters', () => {
         platformSource: 'claude-code',
       }),
     });
-    const claudeBody = await claude.json();
+    const claudeBody = await readJson<CompatObservationsResponse>(claude);
 
     const cursor = await authedFetch(projectScopedApiKey, '/api/sessions/observations', {
       method: 'POST',
@@ -283,7 +304,7 @@ describe('Phase 9 compat adapters', () => {
         platformSource: 'Cursor',
       }),
     });
-    const cursorBody = await cursor.json();
+    const cursorBody = await readJson<CompatObservationsResponse>(cursor);
 
     expect(claude.status).toBe(200);
     expect(cursor.status).toBe(200);
@@ -322,7 +343,7 @@ describe('Phase 9 compat adapters', () => {
       }),
     });
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body = await readJson<CompatSummarizeResponse>(response);
     expect(body.status).toBe('queued');
     expect(typeof body.serverSessionId).toBe('string');
     expect(typeof body.generationJobId).toBe('string');
@@ -353,7 +374,7 @@ describe('Phase 9 compat adapters', () => {
       }),
     });
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body = await readJson<CompatSummarizeResponse>(response);
     expect(body.status).toBe('skipped');
     expect(body.reason).toBe('subagent_context');
     expect(enqueuedSummaryJobs.length).toBe(0);
@@ -368,12 +389,12 @@ describe('Phase 9 compat adapters', () => {
       method: 'POST',
       body: JSON.stringify({ contentSessionId: 'cc-resum' }),
     });
-    const b1 = await r1.json();
+    const b1 = await readJson<CompatSummarizeResponse>(r1);
     const r2 = await authedFetch(projectScopedApiKey, '/api/sessions/summarize', {
       method: 'POST',
       body: JSON.stringify({ contentSessionId: 'cc-resum' }),
     });
-    const b2 = await r2.json();
+    const b2 = await readJson<CompatSummarizeResponse>(r2);
     expect(b1.generationJobId).toBe(b2.generationJobId);
 
     const allJobs = await storage.observationGenerationJobs.listByStatusForScope({

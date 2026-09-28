@@ -12,9 +12,52 @@ import {
 } from '../../../src/storage/postgres/index.js';
 import { DisabledServerQueueManager } from '../../../src/server/runtime/types.js';
 import { logger } from '../../../src/utils/logger.js';
+import { readJson } from '../../helpers/http-json.js';
 import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
+
+interface SessionBody {
+  id: string;
+  platformSource: string | null;
+  endedAtEpoch: number | null;
+}
+
+interface GenerationJobBody {
+  id: string;
+  sourceType: string;
+}
+
+interface EventBody {
+  id: string;
+  serverSessionId: string | null;
+  platformSource: string | null;
+}
+
+interface SessionStartResponse {
+  session: SessionBody;
+}
+
+interface SessionEndResponse {
+  session: SessionBody;
+  generationJob: GenerationJobBody;
+}
+
+interface EventResponse {
+  event: EventBody;
+}
+
+interface EventBatchResponse {
+  events: { event: EventBody }[];
+}
+
+interface SearchResponse {
+  observations: { content: string }[];
+}
+
+interface ContextResponse {
+  context: string;
+}
 
 describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
   if (!testDatabaseUrl) {
@@ -135,13 +178,13 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       body: JSON.stringify({ projectId, externalSessionId: 'ext-1' }),
     });
     expect(a.status).toBe(201);
-    const aJson = await a.json();
+    const aJson = await readJson<SessionStartResponse>(a);
     const b = await authedFetch('/v1/sessions/start', {
       method: 'POST',
       body: JSON.stringify({ projectId, externalSessionId: 'ext-1' }),
     });
     expect(b.status).toBe(200);
-    const bJson = await b.json();
+    const bJson = await readJson<SessionStartResponse>(b);
     expect(bJson.session.id).toBe(aJson.session.id);
   });
 
@@ -151,7 +194,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       body: JSON.stringify({ projectId, externalSessionId: 'shared-ext', platformSource: 'Cursor' }),
     });
     expect(cursor.status).toBe(201);
-    const cursorJson = await cursor.json();
+    const cursorJson = await readJson<SessionStartResponse>(cursor);
     expect(cursorJson.session.platformSource).toBe('cursor');
 
     const cursorAgain = await authedFetch('/v1/sessions/start', {
@@ -159,7 +202,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       body: JSON.stringify({ projectId, externalSessionId: 'shared-ext', platformSource: 'cursor-cli' }),
     });
     expect(cursorAgain.status).toBe(200);
-    const cursorAgainJson = await cursorAgain.json();
+    const cursorAgainJson = await readJson<SessionStartResponse>(cursorAgain);
     expect(cursorAgainJson.session.id).toBe(cursorJson.session.id);
 
     const codex = await authedFetch('/v1/sessions/start', {
@@ -167,7 +210,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       body: JSON.stringify({ projectId, externalSessionId: 'shared-ext', platformSource: 'Codex CLI' }),
     });
     expect(codex.status).toBe(201);
-    const codexJson = await codex.json();
+    const codexJson = await readJson<SessionStartResponse>(codex);
     expect(codexJson.session.platformSource).toBe('codex');
     expect(codexJson.session.id).not.toBe(cursorJson.session.id);
 
@@ -176,7 +219,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       body: JSON.stringify({ projectId, externalSessionId: 'shared-ext' }),
     });
     expect(legacy.status).toBe(201);
-    const legacyJson = await legacy.json();
+    const legacyJson = await readJson<SessionStartResponse>(legacy);
     expect(legacyJson.session.platformSource).toBeNull();
     expect(legacyJson.session.id).not.toBe(cursorJson.session.id);
     expect(legacyJson.session.id).not.toBe(codexJson.session.id);
@@ -187,18 +230,18 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       method: 'POST',
       body: JSON.stringify({ projectId, externalSessionId: 'ext-end' }),
     });
-    const { session } = await startResp.json();
+    const { session } = await readJson<SessionStartResponse>(startResp);
 
     const end1 = await authedFetch(`/v1/sessions/${session.id}/end`, { method: 'POST' });
     expect(end1.status).toBe(200);
-    const end1Json = await end1.json();
+    const end1Json = await readJson<SessionEndResponse>(end1);
     expect(end1Json.generationJob.sourceType).toBe('session_summary');
     expect(end1Json.session.endedAtEpoch).not.toBeNull();
     expect(enqueuedSummaryJobs.length).toBe(1);
 
     const end2 = await authedFetch(`/v1/sessions/${session.id}/end`, { method: 'POST' });
     expect(end2.status).toBe(200);
-    const end2Json = await end2.json();
+    const end2Json = await readJson<SessionEndResponse>(end2);
     // Same generation job id (UNIQUE collapse).
     expect(end2Json.generationJob.id).toBe(end1Json.generationJob.id);
     // Re-ending may still publish to the queue (BullMQ add() is idempotent on
@@ -232,7 +275,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       method: 'POST',
       body: JSON.stringify({ projectId, externalSessionId: 'ext-evt' }),
     });
-    const { session } = await startResp.json();
+    const { session } = await readJson<SessionStartResponse>(startResp);
 
     const eventResp = await authedFetch('/v1/events', {
       method: 'POST',
@@ -259,7 +302,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
         platformSource: 'Cursor',
       }),
     });
-    const cursorSession = (await cursorStart.json()).session;
+    const { session: cursorSession } = await readJson<SessionStartResponse>(cursorStart);
     await authedFetch('/v1/sessions/start', {
       method: 'POST',
       body: JSON.stringify({
@@ -283,7 +326,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       }),
     });
     expect(eventResp.status).toBe(201);
-    const eventJson = await eventResp.json();
+    const eventJson = await readJson<EventResponse>(eventResp);
     expect(eventJson.event.serverSessionId).toBe(cursorSession.id);
     expect(eventJson.event.platformSource).toBe('cursor');
   });
@@ -298,7 +341,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
         platformSource: null,
       }),
     });
-    const legacySession = (await legacyStart.json()).session;
+    const { session: legacySession } = await readJson<SessionStartResponse>(legacyStart);
     await authedFetch('/v1/sessions/start', {
       method: 'POST',
       body: JSON.stringify({
@@ -322,7 +365,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       }),
     });
     expect(eventResp.status).toBe(201);
-    const eventJson = await eventResp.json();
+    const eventJson = await readJson<EventResponse>(eventResp);
     expect(eventJson.event.serverSessionId).toBe(legacySession.id);
     expect(eventJson.event.platformSource).toBeNull();
   });
@@ -337,7 +380,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
         platformSource: 'Cursor',
       }),
     });
-    const cursorSession = (await cursorStart.json()).session;
+    const { session: cursorSession } = await readJson<SessionStartResponse>(cursorStart);
     const codexStart = await authedFetch('/v1/sessions/start', {
       method: 'POST',
       body: JSON.stringify({
@@ -347,7 +390,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
         platformSource: 'Codex CLI',
       }),
     });
-    const codexSession = (await codexStart.json()).session;
+    const { session: codexSession } = await readJson<SessionStartResponse>(codexStart);
 
     const batchResp = await authedFetch('/v1/events/batch?generate=false', {
       method: 'POST',
@@ -382,13 +425,13 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       ]),
     });
     expect(batchResp.status).toBe(201);
-    const batchJson = await batchResp.json();
-    expect(batchJson.events.map((item: { event: { serverSessionId: string | null } }) => item.event.serverSessionId)).toEqual([
+    const batchJson = await readJson<EventBatchResponse>(batchResp);
+    expect(batchJson.events.map(item => item.event.serverSessionId)).toEqual([
       cursorSession.id,
       codexSession.id,
       null,
     ]);
-    expect(batchJson.events.map((item: { event: { platformSource: string | null } }) => item.event.platformSource)).toEqual([
+    expect(batchJson.events.map(item => item.event.platformSource)).toEqual([
       'cursor',
       'codex',
       'cursor',
@@ -430,8 +473,8 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       }),
     });
     expect(search.status).toBe(200);
-    const searchJson = await search.json();
-    expect(searchJson.observations.map((item: { content: string }) => item.content)).toEqual([
+    const searchJson = await readJson<SearchResponse>(search);
+    expect(searchJson.observations.map(item => item.content)).toEqual([
       'platformscoped cursor observation',
     ]);
 
@@ -444,7 +487,7 @@ describe('ServerV1PostgresRoutes Phase 6 session endpoints', () => {
       }),
     });
     expect(context.status).toBe(200);
-    const contextJson = await context.json();
+    const contextJson = await readJson<ContextResponse>(context);
     expect(contextJson.context).toContain('platformscoped cursor observation');
     expect(contextJson.context).not.toContain('platformscoped codex observation');
   });
