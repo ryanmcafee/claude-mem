@@ -64,6 +64,21 @@ export interface UserPromptRecord {
   created_at_epoch: number;
 }
 
+export interface SdkSessionRecord {
+  id: number;
+  content_session_id: string;
+  memory_session_id: string;
+  project: string;
+  platform_source: string;
+  user_prompt: string;
+  custom_title: string | null;
+  started_at: string;
+  started_at_epoch: number;
+  completed_at: string | null;
+  completed_at_epoch: number | null;
+  status: string;
+}
+
 export interface LatestPromptResult {
   id: number;
   session_db_id?: number | null;

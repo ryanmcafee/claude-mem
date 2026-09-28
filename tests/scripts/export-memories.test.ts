@@ -83,7 +83,7 @@ describe('export-memories script', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
     const outputFile = join(tempDir, 'export.json');
 
     await exportMemories('needle', outputFile, 'project-a');
@@ -111,7 +111,7 @@ describe('export-memories script', () => {
     const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT',
@@ -130,7 +130,7 @@ describe('export-memories script', () => {
     const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT in settings.json: missing',
@@ -149,7 +149,7 @@ describe('export-memories script', () => {
     const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT in settings.json: missing',
@@ -192,7 +192,7 @@ describe('export-memories script', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
     const outputFile = join(tempDir, 'export.json');
 
     await expect(exportMemories('needle', outputFile)).rejects.toThrow(
@@ -220,7 +220,7 @@ describe('export-memories script', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Worker request timed out after 30000ms',

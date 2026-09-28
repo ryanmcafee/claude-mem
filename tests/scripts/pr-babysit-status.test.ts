@@ -4,7 +4,7 @@ process.env.PR_BABYSIT_STATUS_NO_MAIN = '1';
 
 describe('pr-babysit-status helpers', () => {
   it('extracts concise actionable hints from bot review bodies', async () => {
-    const { extractActionableHints } = await import('../../scripts/pr-babysit-status.ts');
+    const { extractActionableHints } = await import('../../scripts/pr-babysit-status.js');
 
     const hints = extractActionableHints(`
 **Actionable comments posted: 2**
@@ -26,7 +26,7 @@ In \`@src/file.ts\`:
   });
 
   it('extracts review comment headings without dumping full markdown', async () => {
-    const { extractActionableHints } = await import('../../scripts/pr-babysit-status.ts');
+    const { extractActionableHints } = await import('../../scripts/pr-babysit-status.js');
 
     const hints = extractActionableHints(`
 _Potential issue_ | _Major_ | _Quick win_
@@ -42,7 +42,7 @@ returns null, this still reports the install as current and skips repair.
   });
 
   it('summarizes branch protection without requiring unavailable fields', async () => {
-    const { summarizeProtection } = await import('../../scripts/pr-babysit-status.ts');
+    const { summarizeProtection } = await import('../../scripts/pr-babysit-status.js');
 
     expect(summarizeProtection({
       required_pull_request_reviews: {

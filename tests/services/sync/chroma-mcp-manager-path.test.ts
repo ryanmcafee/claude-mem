@@ -7,7 +7,7 @@ import * as realLogger from '../../../src/utils/logger.js';
 import * as realSettingsDefaultsManager from '../../../src/shared/SettingsDefaultsManager.js';
 import * as realPaths from '../../../src/shared/paths.js';
 import * as realEnvSanitizer from '../../../src/supervisor/env-sanitizer.js';
-import * as realSupervisor from '../../../src/supervisor/index.ts';
+import * as realSupervisor from '../../../src/supervisor/index.js';
 
 const realClientSdkSnapshot = { ...realClientSdk };
 const realStdioSdkSnapshot = { ...realStdioSdk };
