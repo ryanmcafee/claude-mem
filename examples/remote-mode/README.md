@@ -118,6 +118,13 @@ array), `metadataMatch` (JSON containment) and `dateStartEpoch`/`dateEndEpoch`
 `dateStart`/`dateEnd`. Passing a local-only argument fails loudly and names the
 substitute rather than returning a plausible, wrong corpus.
 
+A `scope: "shared"` filter selects other tenants' shared observations, so it
+cannot also filter on `metadataMatch` or `platformSource`: those test attributes
+a shared row never discloses to you, and the resulting `observationCount` would
+answer the question the response withholds. The combination is `400` from the
+schema and the server alike. Filter on `kinds`, `query` or the date bounds, or
+use `scope: "project"` to filter your own observations on metadata.
+
 Publishing a corpus needs `memories:write:shared`, exactly like publishing an
 observation — and a shared corpus may contain **only** observations that are
 themselves shared. A build or rebuild that would include a private row is
