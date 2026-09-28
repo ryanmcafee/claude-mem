@@ -224,15 +224,15 @@ describe('ServerClient', () => {
     });
     expect(captured[0]?.url).toBe('http://localhost:9999/v1/memories');
     expect(captured[0]?.method).toBe('POST');
-    // Write-path contract (#2684): content maps onto narrative (the FTS-indexed
-    // / trigger-precondition column) and type defaults from kind, so the row is
-    // never empty. The old payload shipped a `content` field that no column
-    // accepted, producing a frozen/empty observation.
+    // Write-path contract: the server runtime's /v1/memories requires `content`
+    // (the NOT NULL column that content_search is generated from). `narrative` /
+    // `type` belonged to the retired sqlite memory_items route and made every
+    // remote observation_add 400.
     const body = captured[0]?.body as Record<string, unknown>;
-    expect(body.narrative).toBe('hello');
+    expect(body.content).toBe('hello');
     expect(body.kind).toBe('manual');
-    expect(body.type).toBe('manual');
-    expect(body.content).toBeUndefined();
+    expect(body.narrative).toBeUndefined();
+    expect(body.type).toBeUndefined();
     expect(result.memory.id).toBe('o1');
   });
 
@@ -296,13 +296,12 @@ describe('ServerClient', () => {
 
   it('payload builders omit absent fields', () => {
     const client = new ServerClient({ serverBaseUrl: 'http://x', apiKey: 'k' });
-    // content → narrative, type defaults from kind (default 'manual') so a
-    // minimal observation_add still persists a searchable row (#2684).
+    // kind defaults to 'manual' so a minimal observation_add still satisfies
+    // the server runtime's /v1/memories schema.
     expect(client.buildAddObservationPayload({ projectId: 'p', content: 'c' })).toEqual({
       projectId: 'p',
       kind: 'manual',
-      type: 'manual',
-      narrative: 'c',
+      content: 'c',
     });
     expect(client.buildSearchPayload({ projectId: 'p', query: 'q' })).toEqual({
       projectId: 'p',

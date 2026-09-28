@@ -361,3 +361,47 @@ jobs:
 
       - name: Server-runtime Docker e2e
         run: npm run e2e:server:docker
+
+  # Seventeen suites read CLAUDE_MEM_TEST_POSTGRES_URL; before this job only the
+  # two named in `tenant-isolation` ever executed. The rest reported green
+  # without running (MCAA-344). `test:postgres` discovers the suites from the
+  # source rather than a list kept here, so a newly added Postgres-gated suite
+  # runs on the next PR instead of skipping silently, and the runner fails the
+  # job if any test skips with the gate set.
+  postgres-suites:
+    name: postgres-gated suites (discovered)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: claude_mem_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d claude_mem_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CLAUDE_MEM_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/claude_mem_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Postgres-gated suites
+        run: npm run test:postgres

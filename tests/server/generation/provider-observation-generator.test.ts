@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import pg from 'pg';
+import type pg from 'pg';
 import {
   bootstrapServerPostgresSchema,
   createPostgresStorageRepositories,
-  type PostgresPoolClient,
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
 import { ProviderObservationGenerator } from '../../../src/server/generation/ProviderObservationGenerator.js';
+import { ModeManager } from '../../../src/services/domain/ModeManager.js';
 import type { ServerGenerationProvider } from '../../../src/server/generation/providers/shared/types.js';
 import type { Job } from 'bullmq';
 import type { GenerateObservationsForEventJob } from '../../../src/server/jobs/types.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
@@ -35,8 +35,7 @@ describe('ProviderObservationGenerator', () => {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
-  let client: PostgresPoolClient;
+  let pool: pg.Pool;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
   let teamId: string;
@@ -45,16 +44,13 @@ describe('ProviderObservationGenerator', () => {
   let jobId: string;
 
   beforeEach(async () => {
-    client = await pool.connect();
-    schemaName = `cm_phase5_gen_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
-    await bootstrapServerPostgresSchema(client);
-    storage = createPostgresStorageRepositories(client);
-
-    pool.on('connect', (poolClient) => {
-      poolClient.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
+    // The generator parses provider XML through the active ModeManager mode;
+    // load it here so this file does not depend on another file's side effect.
+    ModeManager.getInstance().loadMode('code');
+    schemaName = await createIsolatedSchema(testDatabaseUrl, 'cm_phase5_gen');
+    pool = poolForSchema(testDatabaseUrl, schemaName);
+    await bootstrapServerPostgresSchema(pool);
+    storage = createPostgresStorageRepositories(pool);
 
     const team = await storage.teams.create({ name: 'team' });
     const project = await storage.projects.create({ teamId: team.id, name: 'p' });
@@ -81,13 +77,8 @@ describe('ProviderObservationGenerator', () => {
   });
 
   afterEach(async () => {
-    if (client) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } catch {}
-      client.release();
-    }
-    pool.removeAllListeners('connect');
+    await pool.end();
+    await dropSchema(testDatabaseUrl, schemaName);
   });
 
   function makeJob(): Job<GenerateObservationsForEventJob> {
@@ -111,12 +102,7 @@ describe('ProviderObservationGenerator', () => {
   it('completes a job using the fake provider response', async () => {
     const xml = '<observation><type>discovery</type><title>OK</title><facts><fact>f</fact></facts></observation>';
     const provider = new StubProvider(xml);
-    const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as Parameters<typeof ProviderObservationGenerator['prototype']['process']>[0]['data'] extends never
-        ? never
-        : never,
-      provider,
-    } as unknown as { pool: pg.Pool; provider: ServerGenerationProvider });
+    const generator = new ProviderObservationGenerator({ pool, provider });
 
     const result = await generator.process(makeJob());
     expect(result.status).toBe('completed');
@@ -133,10 +119,7 @@ describe('ProviderObservationGenerator', () => {
 
   it('marks a job as failed (no retry) when provider returns malformed XML', async () => {
     const provider = new StubProvider('not xml at all');
-    const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as pg.Pool,
-      provider,
-    } as unknown as ConstructorParameters<typeof ProviderObservationGenerator>[0]);
+    const generator = new ProviderObservationGenerator({ pool, provider });
 
     await expect(generator.process(makeJob())).rejects.toThrow(/parse error/);
 
