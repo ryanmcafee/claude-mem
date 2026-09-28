@@ -121,6 +121,33 @@ export const CorpusFilterSchema = z.object({
 }).strict();
 export type CorpusFilter = z.infer<typeof CorpusFilterSchema>;
 
+/**
+ * Filter fields that test an attribute a projected member row does not carry.
+ * `kinds`, `query` and the date bounds test `kind`, `content` and
+ * `createdAtEpoch`, which a non-owner receives anyway, so they disclose nothing
+ * new. These two do not: `metadataMatch` tests `metadata` and `platformSource`
+ * tests the originating session, and both are withheld from a projected row.
+ */
+export const CORPUS_OWNER_ONLY_FILTER_FIELDS = ['metadataMatch', 'platformSource'] as const;
+
+/**
+ * Which owner-only fields this filter would actually evaluate. Emptiness follows
+ * the SQL exactly -- an absent `metadataMatch`, `{}`, or a null `platformSource`
+ * emits no clause and so tests nothing -- because selection, counting and this
+ * gate have to agree on the rule or the counts answer what the gate refused
+ * (ADR 0002 condition 14).
+ */
+export function ownerOnlyFilterFields(filter: CorpusFilter): string[] {
+  const fields: string[] = [];
+  if (filter.metadataMatch && Object.keys(filter.metadataMatch).length > 0) {
+    fields.push('metadataMatch');
+  }
+  if (typeof filter.platformSource === 'string' && filter.platformSource.length > 0) {
+    fields.push('platformSource');
+  }
+  return fields;
+}
+
 export const CorpusNameSchema = z.string().min(1).regex(CORPUS_NAME_PATTERN, CORPUS_NAME_ERROR);
 
 /**

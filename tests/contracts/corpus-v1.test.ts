@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Compatibility tests for the remote corpus contract (docs/adr/0001).
+// Compatibility tests for the remote corpus contract (docs/adr/0002).
 //
 // These run with no Postgres and no server: the contract is data, so it can be
 // asserted directly. They exist to make three classes of change loud rather
@@ -24,6 +24,7 @@ import {
   CORPUS_MEMBER_ORDER,
   CORPUS_MEMBER_PREDICATES,
   CORPUS_OPERATION_SCOPES,
+  CORPUS_OWNER_ONLY_FILTER_FIELDS,
   CORPUS_PATHS,
   CorpusFilterSchema,
   CorpusRefSchema,
@@ -56,6 +57,7 @@ import {
   WRITE_SCOPE,
   corpusContentDigest,
   isArtifactServable,
+  ownerOnlyFilterFields,
   parseCorpusScope,
   type CorpusMemberIdentity,
   type CorpusToolName,
@@ -707,5 +709,47 @@ describe('corpus contract v1 -- error vocabulary', () => {
     expect(CORPUS_ERRORS.sharedPrivateMembers).toEqual({ status: 422, error: 'SharedCorpusPrivateMembers' });
     expect(CORPUS_ERRORS.tooLarge).toEqual({ status: 422, error: 'CorpusTooLarge' });
     expect(CORPUS_ERRORS.sharedPrivateMembers.error).not.toBe(CORPUS_ERRORS.tooLarge.error);
+  });
+});
+
+// Condition 14. The rule lives here rather than in the service so that selection,
+// counting and the build gate cannot hold three different ideas of which fields
+// test something a non-owner is not allowed to learn.
+describe('corpus contract v1 -- the selection oracle', () => {
+  it('names metadataMatch and platformSource, and only those, as owner-only', () => {
+    expect(CORPUS_OWNER_ONLY_FILTER_FIELDS).toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  it('reports a field only when the SQL would actually emit a clause for it', () => {
+    expect(ownerOnlyFilterFields({})).toEqual([]);
+    expect(ownerOnlyFilterFields({ metadataMatch: {} })).toEqual([]);
+    expect(ownerOnlyFilterFields({ platformSource: null })).toEqual([]);
+    expect(ownerOnlyFilterFields({ metadataMatch: { agentId: 'a' } })).toEqual(['metadataMatch']);
+    expect(ownerOnlyFilterFields({ platformSource: 'cursor' })).toEqual(['platformSource']);
+    expect(ownerOnlyFilterFields({ metadataMatch: { agentId: 'a' }, platformSource: 'cursor' }))
+      .toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  // kind, content and createdAtEpoch are on a projected row, so selecting on them
+  // tells a non-owner nothing the response withholds.
+  it('leaves the fields a projected member row already carries alone', () => {
+    expect(ownerOnlyFilterFields({
+      kinds: ['decision'],
+      query: 'rollback',
+      dateStartEpoch: 1,
+      dateEndEpoch: 2,
+      limit: 10,
+      scope: 'shared',
+    })).toEqual([]);
+  });
+
+  // The gate is only worth having if the response really withholds what these two
+  // fields test: `metadata` is denied outright, and no projected key describes the
+  // originating session that `platformSource` matches on.
+  it('withholds what each owner-only field tests', () => {
+    const projectedKeys = Object.keys(CorpusProjectedSourceSchema.shape);
+    expect(CORPUS_SOURCE_PROVENANCE_FIELDS).toContain('metadata');
+    expect(projectedKeys).not.toContain('metadata');
+    expect(projectedKeys.some(key => /session|platform/i.test(key))).toBe(false);
   });
 });
