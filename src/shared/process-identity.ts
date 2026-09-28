@@ -22,9 +22,10 @@ import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 // Windows lacks a cheap /proc-style start-time read and `ps lstart`, so we
 // shell to PowerShell's CIM (wmic is removed on Windows 11). The lookup is
 // ~100-300ms, so cache per-pid for 5s to avoid re-shelling when the same PID
-// is validated repeatedly within one spawn-decision window.
+// is validated repeatedly within one spawn-decision window. Successful reads
+// only — see captureWindowsStartToken for why a null is never cached.
 const WINDOWS_START_TOKEN_CACHE_TTL_MS = 5_000;
-const windowsStartTokenCache = new Map<number, { token: string | null; capturedAtMs: number }>();
+const windowsStartTokenCache = new Map<number, { token: string; capturedAtMs: number }>();
 
 /**
  * Count of RAW platform reads (cache misses and deliberate bypasses alike).
@@ -88,6 +89,18 @@ function captureWindowsStartToken(pid: number, bypassCache = false): string | nu
       error: error instanceof Error ? error.message : String(error)
     });
     token = null;
+  }
+
+  // "Does not resolve" is the one answer that must never be remembered.
+  // Windows reissues a freed PID within milliseconds, so a cached null is
+  // served to the REPLACEMENT for up to 5s — and a null token makes
+  // isSameProcess return true unconditionally, disabling the reuse guard at
+  // the exact moment a reuse happened. Deleting rather than skipping the write
+  // also retires a token cached while the PID was alive, so the next read
+  // observes whoever owns the number now.
+  if (token === null) {
+    windowsStartTokenCache.delete(pid);
+    return null;
   }
 
   windowsStartTokenCache.set(pid, { token, capturedAtMs: Date.now() });
