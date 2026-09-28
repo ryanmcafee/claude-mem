@@ -66,7 +66,8 @@ export function createCorpusMcpBackend(options: CorpusMcpBackendOptions): Corpus
         : await service.getById(scoped(caller), ref.corpusId, opts);
       // A foreign corpus omits the owner's project id, so fall back to the
       // caller's own scope rather than recording an absent one.
-      await options.audit('corpus.read', corpus.id, corpus.projectId ?? caller.projectId ?? null, {
+      const auditProjectId = 'projectId' in corpus ? corpus.projectId : caller.projectId ?? null;
+      await options.audit('corpus.read', corpus.id, auditProjectId, {
         via: 'mcp', mode: 'get', foreign: corpus.foreign,
       });
       return { corpus };
