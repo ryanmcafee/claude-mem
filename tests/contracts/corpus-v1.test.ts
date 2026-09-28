@@ -58,7 +58,9 @@ import {
   corpusContentDigest,
   isArtifactServable,
   ownerOnlyFilterFields,
+  ownerOnlyFilterRefusal,
   parseCorpusScope,
+  ProjectableCorpusFilterSchema,
   type CorpusMemberIdentity,
   type CorpusToolName,
 } from '../../src/server/contracts/corpus-v1.js';
@@ -780,5 +782,96 @@ describe('corpus contract v1 -- the selection oracle', () => {
     expect(CORPUS_SOURCE_PROVENANCE_FIELDS).toContain('metadata');
     expect(projectedKeys).not.toContain('metadata');
     expect(projectedKeys.some(key => /session|platform/i.test(key))).toBe(false);
+  });
+});
+
+// Condition 22. The service gate stays the authority, but a rule only a runtime
+// 400 teaches is a rule an SDK generated from this contract does not have.
+describe('corpus contract v1 -- the refusal is in the contract', () => {
+  it('refuses a shared-scope filter on an owner-only field', () => {
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map(issue => issue.path.join('.'))).toEqual(['metadataMatch']);
+  });
+
+  it('reports every offending field, not just the first', () => {
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+      platformSource: 'cursor',
+    });
+    expect(parsed.error?.issues.map(issue => issue.path.join('.')))
+      .toEqual(['metadataMatch', 'platformSource']);
+  });
+
+  // The schema and the service must refuse the same set or the contract
+  // describes a request the server accepts, or vice versa.
+  it('refuses exactly the filters ownerOnlyFilterFields names', () => {
+    const cases = [
+      {},
+      { metadataMatch: {} },
+      { platformSource: null },
+      { metadataMatch: { agentId: 'a' } },
+      { platformSource: 'cursor' },
+      { kinds: ['decision'], query: 'rollback', dateStartEpoch: 1, limit: 10 },
+    ];
+    for (const base of cases) {
+      const shared = { ...base, scope: 'shared' as const };
+      const expected = ownerOnlyFilterFields(shared).length === 0;
+      expect(ProjectableCorpusFilterSchema.safeParse(shared).success).toBe(expected);
+      // Project scope evaluates the same fields against the caller's own rows,
+      // where they disclose nothing, so it must stay accepted.
+      expect(ProjectableCorpusFilterSchema.safeParse({ ...base, scope: 'project' }).success).toBe(true);
+      expect(ProjectableCorpusFilterSchema.safeParse(base).success).toBe(true);
+    }
+  });
+
+  // ownerOnlyFilterFields treats '' as emitting no clause, but the structural
+  // schema never lets it through, so the gate is not what rejects it.
+  it('rejects an empty platformSource structurally, whatever the scope', () => {
+    for (const scope of ['project', 'shared'] as const) {
+      expect(ProjectableCorpusFilterSchema.safeParse({ scope, platformSource: '' }).success)
+        .toBe(false);
+      expect(CorpusFilterSchema.safeParse({ scope, platformSource: '' }).success).toBe(false);
+    }
+  });
+
+  it('carries the refusal into the build request body', () => {
+    const parsed = BuildCorpusRequestSchema.safeParse({
+      name: 'probe',
+      filter: { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path.join('.')).toBe('filter.metadataMatch');
+  });
+
+  it('states the same reason the runtime 400 states', () => {
+    const message = ownerOnlyFilterRefusal(['metadataMatch']);
+    const parsed = ProjectableCorpusFilterSchema.safeParse({
+      scope: 'shared',
+      metadataMatch: { incidentId: 'INC-4471' },
+    });
+    expect(parsed.error?.issues[0]?.message).toBe(message);
+    expect(message).toContain('scope "project"');
+  });
+
+  // A corpus built before the gate must stay readable and deletable, and its
+  // stored filter still round-trips through the structural schema. The purge,
+  // not a parse failure, is what stops it answering (condition 23).
+  it('leaves the structural schema unrefined so stored filters still parse', () => {
+    const stored = { scope: 'shared' as const, metadataMatch: { incidentId: 'INC-4471' } };
+    expect(CorpusFilterSchema.safeParse(stored).success).toBe(true);
+  });
+});
+
+// An MCP client reads the tool schema, not the zod schema, so the same rule has
+// to be visible there or an agent only learns it from a failed call.
+describe('corpus contract v1 -- build_corpus states the refusal in its tool schema', () => {
+  it.each(CORPUS_OWNER_ONLY_FILTER_FIELDS)('documents %s as unavailable with scope "shared"', (field) => {
+    const property = tool('build_corpus').inputSchema.properties[field] as { description: string };
+    expect(property.description).toContain('scope "shared"');
   });
 });

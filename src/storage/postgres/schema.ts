@@ -53,6 +53,39 @@ DROP TABLE IF EXISTS corpora;
 DROP INDEX IF EXISTS idx_observations_metadata;
 `;
 
+/**
+ * ADR 0002 condition 23. The build gate that refuses a shared-scope filter on
+ * `metadataMatch`/`platformSource` is prospective, but a corpus materialized
+ * before it keeps those foreign members at rest and keeps answering the same
+ * question through `observationCount`. Membership, the cached renders derived
+ * from it and the stored counts are all cleared; the corpus row survives so the
+ * operator still sees it and gets the explaining 400 on rebuild.
+ *
+ * The predicate mirrors `ownerOnlyFilterFields()`: an absent `metadataMatch`,
+ * `{}`, a null `platformSource` and `''` all emit no clause and so select
+ * nothing. Safe to re-run — after the gate ships the affected set is empty,
+ * which is why it sits in the ordinary bootstrap rather than a one-shot script.
+ * Condition 11's artifact purge folds in here when it lands.
+ */
+export const CORPUS_PREGATE_PURGE_SQL = `
+WITH poisoned AS (
+  SELECT id FROM corpora
+  WHERE member_scope = 'shared'
+    AND (
+      (jsonb_typeof(filter -> 'metadataMatch') = 'object' AND filter -> 'metadataMatch' <> '{}'::jsonb)
+      OR COALESCE(filter ->> 'platformSource', '') <> ''
+    )
+),
+purged_members AS (
+  DELETE FROM corpus_members WHERE corpus_id IN (SELECT id FROM poisoned)
+),
+purged_artifacts AS (
+  DELETE FROM corpus_artifacts WHERE corpus_id IN (SELECT id FROM poisoned)
+)
+UPDATE corpora SET stats = '{}'::jsonb, built_at = NULL, updated_at = now()
+WHERE id IN (SELECT id FROM poisoned);
+`;
+
 export async function bootstrapServerPostgresSchema(client: PostgresQueryable): Promise<void> {
   if (isPostgresPool(client)) {
     const poolClient = await client.connect();
@@ -78,6 +111,7 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
 
 async function applyPhase1Migration(client: PostgresQueryable): Promise<void> {
   await client.query(PHASE_1_SCHEMA_SQL);
+  await client.query(CORPUS_PREGATE_PURGE_SQL);
   await client.query(
     `
       INSERT INTO server_beta_schema_migrations (version, description)

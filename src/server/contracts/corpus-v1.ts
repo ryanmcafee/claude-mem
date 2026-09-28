@@ -148,6 +148,36 @@ export function ownerOnlyFilterFields(filter: CorpusFilter): string[] {
   return fields;
 }
 
+/**
+ * The one wording of the refusal, shared by the schema and the service gate so a
+ * client reading the contract and a client reading the 400 learn the same rule.
+ */
+export function ownerOnlyFilterRefusal(fields: readonly string[]): string {
+  return `A shared-scope corpus cannot filter on ${fields.join(' or ')}. `
+    + 'That scope selects other tenants\' shared observations, whose '
+    + `${fields.join(' and ')} you never receive, so the member count would reveal them. `
+    + 'Drop the field, or use scope "project" to filter your own observations on it.';
+}
+
+/**
+ * A filter a client may submit. Structurally `CorpusFilterSchema` plus the rule
+ * the server enforces anyway (ADR 0002 condition 22): an SDK generated from the
+ * contract should refuse the combination rather than learn it from a runtime
+ * 400. The service gate stays the authority, because a filter stored before the
+ * gate reaches selection without passing through here.
+ *
+ * `CorpusFilterSchema` itself stays structural on purpose -- it also parses
+ * stored filters and serializes an owner's `filter` back out, and a corpus built
+ * before the gate must still be readable and deletable.
+ */
+export const ProjectableCorpusFilterSchema = CorpusFilterSchema.superRefine((filter, ctx) => {
+  if (filter.scope !== 'shared') return;
+  const fields = ownerOnlyFilterFields(filter);
+  for (const field of fields) {
+    ctx.addIssue({ code: 'custom', path: [field], message: ownerOnlyFilterRefusal(fields) });
+  }
+});
+
 export const CorpusNameSchema = z.string().min(1).regex(CORPUS_NAME_PATTERN, CORPUS_NAME_ERROR);
 
 /**
@@ -196,7 +226,7 @@ export function isArtifactServable(
 export const BuildCorpusRequestSchema = z.object({
   name: CorpusNameSchema,
   description: z.string().max(2000).optional(),
-  filter: CorpusFilterSchema.optional(),
+  filter: ProjectableCorpusFilterSchema.optional(),
   /** Publish cross-tenant. Requires SHARED_WRITE_SCOPE and shared-only members. */
   shared: z.boolean().optional(),
 }).strict();
@@ -562,10 +592,10 @@ export const CORPUS_MCP_TOOLS = [
         description: { type: 'string', description: 'What this corpus is about.' },
         kinds: { type: 'array', items: { type: 'string' }, description: 'Observation kinds to include.' },
         query: { type: 'string', description: 'Full-text filter over observation content.' },
-        platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor.' },
+        platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor. Not available with scope "shared".' },
         dateStartEpoch: { type: 'integer', description: 'Include observations created at or after this epoch-ms.' },
         dateEndEpoch: { type: 'integer', description: 'Include observations created at or before this epoch-ms.' },
-        metadataMatch: { type: 'object', additionalProperties: true, description: 'Metadata keys the observation must contain.' },
+        metadataMatch: { type: 'object', additionalProperties: true, description: 'Metadata keys the observation must contain. Not available with scope "shared".' },
         limit: {
           type: 'integer',
           minimum: 1,
