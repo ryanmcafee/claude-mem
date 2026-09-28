@@ -35,6 +35,9 @@ export interface ObservationRecord {
   concept?: string;
   prompt_number?: number;
   discovery_tokens?: number;
+  // Added by the agent-attribution migration; null on rows written before it.
+  agent_type?: string | null;
+  agent_id?: string | null;
 }
 
 export interface SessionSummaryRecord {
