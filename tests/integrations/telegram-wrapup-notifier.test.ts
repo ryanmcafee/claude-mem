@@ -13,6 +13,7 @@ import {
   loadTelegramWrapupConfig,
   resolveWrapupRoute,
 } from '../../src/services/integrations/TelegramWrapupNotifier.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 describe('Telegram wrap-up notifier', () => {
   let store: SessionStore;
@@ -195,7 +196,7 @@ describe('Telegram wrap-up notifier', () => {
     // fixtures in tests/worker/openrouter-empty-content.test.ts. Only the
     // assistant answer belongs in Telegram, never reasoning or tool data.
     const answer = '• SessionEnd sends one short wrap-up\n• Stop keeps storing summaries';
-    const inferenceFetch = mock(async () => new Response(JSON.stringify({
+    const inferenceFetch = mockFetch(async () => new Response(JSON.stringify({
       model: 'deepseek/deepseek-v4-flash-0731',
       choices: [{
         message: {
@@ -408,7 +409,7 @@ describe('Telegram wrap-up notifier', () => {
     const { sessionDbId, memorySessionId } = createSession('project-a', 'content-retry');
     storeSummary(memorySessionId, 'project-a');
     let failPost = true;
-    const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchMock = mockFetch((_url: string | URL | Request, _init?: RequestInit) => {
       const response = failPost
         ? new Response('', { status: 500, statusText: 'Server Error' })
         : new Response('', { status: 200 });

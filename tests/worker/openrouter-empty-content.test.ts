@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { OpenRouterProvider } from '../../src/services/worker/OpenRouterProvider.js';
 import { logger } from '../../src/utils/logger.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 describe('OpenRouterProvider empty content', () => {
   const originalFetch = global.fetch;
@@ -10,7 +11,7 @@ describe('OpenRouterProvider empty content', () => {
   });
 
   it('accepts an empty message from a reasoning model and preserves usage', async () => {
-    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+    global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       model: 'reasoning-model',
       choices: [{
         message: {
@@ -87,7 +88,7 @@ describe('OpenRouterProvider empty content', () => {
   });
 
   it('still rejects a response without a message object', async () => {
-    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+    global.fetch = mockFetch(() => Promise.resolve(new Response(JSON.stringify({
       choices: [{ finish_reason: 'stop' }],
     }), { status: 200 })));
     const errorSpy = spyOn(logger, 'error').mockImplementation(() => {});
