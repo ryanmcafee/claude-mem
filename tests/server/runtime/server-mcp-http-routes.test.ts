@@ -133,8 +133,15 @@ describe('POST /v1/mcp — remote authenticated MCP recall (streamable HTTP)', (
     return mcp.connect(transport).then(() => mcp);
   }
 
-  function textOf(result: { content: unknown }): string {
-    return (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
+  function textOf(result: unknown): string {
+    const content =
+      result && typeof result === 'object' && 'content' in result ? result.content : undefined;
+    if (!Array.isArray(content)) return '';
+    const first: unknown = content[0];
+    if (first && typeof first === 'object' && 'text' in first && typeof first.text === 'string') {
+      return first.text;
+    }
+    return '';
   }
 
   it('lists the recall tools over HTTP with a valid key', async () => {
