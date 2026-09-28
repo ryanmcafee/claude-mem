@@ -6,6 +6,7 @@ import {
   resetDependencyStatusesForTesting,
 } from '../../src/shared/dependency-health.js';
 import type { ActiveSession } from '../../src/services/worker-types.js';
+import { makeActiveSession } from '../helpers/active-session.js';
 // Capture real exports before mock.module mutates the live namespace, then
 // re-register the snapshot in afterAll so this mock does not leak into later
 // test files (bun's mock.module is process-global; mock.restore() does NOT
@@ -52,27 +53,13 @@ const { SessionRoutes } = await import('../../src/services/worker/http/routes/Se
 const { ClaudeProvider } = await import('../../src/services/worker/ClaudeProvider.js');
 
 function makeSession(): ActiveSession {
-  return {
+  return makeActiveSession({
     sessionDbId: 42,
     contentSessionId: 'content-42',
     memorySessionId: null,
     project: 'project',
-    platformSource: 'claude',
     userPrompt: 'prompt',
-    abortController: new AbortController(),
-    generatorPromise: null,
-    lastPromptNumber: 1,
-    startTime: Date.now(),
-    cumulativeInputTokens: 0,
-    cumulativeOutputTokens: 0,
-    earliestPendingTimestamp: null,
-    claimedMessageIds: [],
-    conversationHistory: [],
-    currentProvider: null,
-    consecutiveRestarts: 0,
-    consecutiveInvalidOutputs: 0,
-    lastGeneratorActivity: Date.now(),
-  };
+  });
 }
 
 describe('Claude setup-required generator gate', () => {
@@ -95,7 +82,9 @@ describe('Claude setup-required generator gate', () => {
     let findAttempts = 0;
     let finalizerCalls = 0;
     let removeSessionImmediateCalls = 0;
-    let repairedRunResolve: (() => void) | null = null;
+    // Held on an object so the assignment inside startSession is visible to
+    // control-flow analysis at the call site below.
+    const repairedRun: { resolve: (() => void) | null } = { resolve: null };
 
     const sessionManager = {
       getSession: () => activeSession,
@@ -119,7 +108,7 @@ describe('Claude setup-required generator gate', () => {
           });
         }
         await new Promise<void>(resolve => {
-          repairedRunResolve = resolve;
+          repairedRun.resolve = resolve;
         });
       },
     };
@@ -172,7 +161,7 @@ describe('Claude setup-required generator gate', () => {
     expect(getDependencyStatus('claude_cli')).toBeNull();
     expect(session.generatorPromise).not.toBeNull();
 
-    repairedRunResolve?.();
+    repairedRun.resolve?.();
     await session.generatorPromise;
 
     expect(finalizerCalls).toBe(1);
