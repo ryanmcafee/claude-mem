@@ -154,21 +154,6 @@ function readStartToken(pid: number, bypassCache: boolean): string | null {
 }
 
 /**
- * True when `pid` still names the process that produced `snapshotToken`.
- *
- * Fallback semantics are deliberately asymmetric: refusing to kill must stay
- * strictly NARROWER than killing, or a token we simply could not read would
- * strand a live orphan and resurrect #2313. So only a token that was captured
- * successfully AND now differs proves reuse; an uncapturable token on either
- * side means "proceed".
- *
- * Windows caveat: captureProcessStartToken caches per-pid for 5s, so when the
- * snapshot and the revalidation fall inside one TTL this re-reads the cached
- * value and cannot detect reuse. It is therefore fully effective on POSIX
- * (/proc and ps are uncached) and best-effort on Windows — no worse than the
- * unchecked behavior it replaces.
- */
-/**
  * Cached identity read. Windows caches per-pid for 5s (a CIM query is
  * ~100-300ms); POSIX always reads fresh, so the cache is Windows-only.
  *
@@ -180,6 +165,19 @@ export function captureProcessStartToken(pid: number): string | null {
   return readStartToken(pid, false);
 }
 
+/**
+ * True when `pid` still names the process that produced `snapshotToken`.
+ *
+ * Fallback semantics are deliberately asymmetric: refusing to kill must stay
+ * strictly NARROWER than killing, or a token we simply could not read would
+ * strand a live orphan and resurrect #2313. So only a token that was captured
+ * successfully AND now differs proves reuse; an uncapturable token on either
+ * side means "proceed".
+ *
+ * Effective on Windows as well as POSIX: the revalidation below bypasses the
+ * 5s cache on every call, and captureWindowsStartToken never caches a null, so
+ * a freed PID cannot serve its predecessor's identity to the replacement.
+ */
 export function isSameProcess(pid: number, snapshotToken: string | null): boolean {
   if (snapshotToken === null) return true;
   // DELIBERATELY BYPASSES THE CACHE.
