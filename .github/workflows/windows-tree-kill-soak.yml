@@ -71,9 +71,16 @@ jobs:
         shell: pwsh
         run: irm bun.sh/install.ps1 | iex
 
-      # No retry and no timeout change: the 20-second waitUntil waits inside
-      # the suite are what detected the orphan defect, and a retry would paper
-      # over the exact race being measured.
+      # No retry, and no change to any assertion or to bun's --timeout: the
+      # 20-second waitUntil waits inside the suite are what detected the orphan
+      # defect, and a retry would paper over the exact race being measured.
+      #
+      # The step timeout is a harness cap, not a retime. An all-passing draw
+      # runs in ~20s, so 8 minutes cannot truncate a healthy suite. It exists
+      # because a wedged draw that trips the JOB timeout is cancelled, and
+      # cancellation kills the `if: always()` upload too -- that is how draw 2
+      # of run 36415539150 produced no evidence at all. A failed step still
+      # runs the upload, so a wedge reports itself instead of going silent.
       #
       # The junit report, not the console output, is what the verdict reads.
       # bun's console format varies with platform and TTY -- a redirected Linux
@@ -81,6 +88,7 @@ jobs:
       # scrape can mistake "never ran" for "passed". junit.xml names every
       # testcase and marks <skipped /> explicitly.
       - name: Tree-kill suite
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
@@ -90,6 +98,20 @@ jobs:
           Get-Content draw.log
           exit $code
 
+      # A wedged draw is the most informative outcome this soak can produce, so
+      # record what is still alive before the runner's orphan sweep reaps it.
+      # On a healthy draw this is empty, which is what makes it readable.
+      - name: Surviving processes
+        if: always()
+        shell: pwsh
+        run: |
+          $survivors = Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -match '^(cmd|PING|conhost|bun)\.exe$' } |
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine
+          if ($survivors) { $survivors | Format-List | Out-String -Width 400 | Set-Content survivors.log }
+          else { Set-Content survivors.log 'no matching survivors' }
+          Get-Content survivors.log
+
       - name: Upload draw evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -98,6 +120,7 @@ jobs:
           path: |
             draw.log
             junit.xml
+            survivors.log
           if-no-files-found: error
 
   verdict:
