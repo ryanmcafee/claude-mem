@@ -303,6 +303,21 @@ describe('ServerClient', () => {
       kind: 'manual',
       content: 'c',
     });
+    // MCAA-241 — the import's dedup key must reach the server verbatim, and the
+    // agent identity must ride along in metadata on the same write.
+    expect(client.buildAddObservationPayload({
+      projectId: 'p',
+      content: 'c',
+      kind: 'observation',
+      agentId: 'laptop',
+      idempotencyKey: 'import:sqlite-v1:observations:abc',
+    })).toEqual({
+      projectId: 'p',
+      kind: 'observation',
+      content: 'c',
+      metadata: { agentId: 'laptop' },
+      idempotencyKey: 'import:sqlite-v1:observations:abc',
+    });
     expect(client.buildSearchPayload({ projectId: 'p', query: 'q' })).toEqual({
       projectId: 'p',
       query: 'q',
