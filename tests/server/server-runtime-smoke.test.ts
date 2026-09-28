@@ -22,6 +22,7 @@ import { createServerApiKey, DEFAULT_LOCAL_API_KEY_SCOPES } from '../../src/serv
 import { loadServerMode } from '../../src/server/runtime/create-server-service.js';
 import { ModeManager } from '../../src/services/domain/ModeManager.js';
 import { logger } from '../../src/utils/logger.js';
+import { readJson } from '../helpers/http-json.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
 
@@ -87,7 +88,7 @@ describe('server runtime in-process smoke (#2550)', () => {
   it('reports the server runtime on /v1/info', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/v1/info`);
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await readJson<{ runtime: string; authMode: string }>(res);
     expect(body.runtime).toBe('server-beta');
     expect(body.authMode).toBe('api-key');
   });
@@ -109,15 +110,15 @@ describe('server runtime in-process smoke (#2550)', () => {
       body: JSON.stringify({ name: 'Smoke Project' }),
     });
     expect(writeRes.status).toBe(201);
-    const { project } = await writeRes.json();
+    const { project } = await readJson<{ project: { id: string } }>(writeRes);
 
     // Read route with the same key — must be authorized and return the project.
     const readRes = await fetch(`http://127.0.0.1:${port}/v1/projects`, {
       headers: { Authorization: `Bearer ${created.rawKey}` },
     });
     expect(readRes.status).toBe(200);
-    const { projects } = await readRes.json();
-    expect(projects.map((p: any) => p.id)).toContain(project.id);
+    const { projects } = await readJson<{ projects: Array<{ id: string }> }>(readRes);
+    expect(projects.map((p) => p.id)).toContain(project.id);
   });
 
   it('serves the viewer at / (the #2552 static handler is mounted)', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { OpenRouterProvider } from '../../src/services/worker/OpenRouterProvider.js';
+import { OpenRouterProvider, type OpenAIMessage } from '../../src/services/worker/OpenRouterProvider.js';
 import { DatabaseManager } from '../../src/services/worker/DatabaseManager.js';
 import { SessionManager } from '../../src/services/worker/SessionManager.js';
 import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
@@ -7,9 +7,8 @@ import type { ConversationMessage } from '../../src/services/worker-types.js';
 import { mockFetch } from '../helpers/fetch-mock';
 
 class TestOpenRouterProvider extends OpenRouterProvider {
-  buildMessages(history: ConversationMessage[]) {
-    return (this as unknown as { conversationToOpenAIMessages(history: ConversationMessage[]): unknown })
-      .conversationToOpenAIMessages(history);
+  buildMessages(history: ConversationMessage[]): OpenAIMessage[] {
+    return this.conversationToOpenAIMessages(history);
   }
 }
 

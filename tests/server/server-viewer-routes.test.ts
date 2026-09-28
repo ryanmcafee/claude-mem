@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { logger } from '../../src/utils/logger.js';
 import { Server, type ServerOptions } from '../../src/services/server/Server.js';
 import { ServerViewerRoutes } from '../../src/server/runtime/ServerViewerRoutes.js';
+import { readJson } from '../helpers/http-json.js';
 
 function baseOptions(): ServerOptions {
   return {
@@ -60,7 +61,7 @@ describe('ServerViewerRoutes on the server runtime (#2552)', () => {
     // The co-mounted API route still resolves (compat/v1 layer reachable).
     const apiRes = await fetch(`http://127.0.0.1:${port}/v1/info`);
     expect(apiRes.status).toBe(200);
-    const apiBody = await apiRes.json();
+    const apiBody = await readJson<{ runtime: string }>(apiRes);
     expect(apiBody.runtime).toBe('server-beta');
 
     // The viewer root route is registered and responds. When the build shipped
@@ -72,7 +73,7 @@ describe('ServerViewerRoutes on the server runtime (#2552)', () => {
       expect(rootRes.headers.get('content-type')).toContain('text/html');
     } else {
       expect(rootRes.status).toBe(503);
-      const body = await rootRes.json();
+      const body = await readJson<{ error: string }>(rootRes);
       expect(body.error).toBe('ViewerUnavailable');
     }
   });
