@@ -1,8 +1,8 @@
 # ADR 0002 -- Remote corpus (knowledge-base) API and MCP contract
 
-- Status: Accepted (revision 8 -- two MCAA-348 sub-clauses that never became
-  conditions are now conditions 20-21; they bind on merging PR #7, per revision 6)
-- Date: 2026-09-28 (revisions 3-8; revisions 1-2 dated 2026-09-27)
+- Status: Accepted (revision 9 -- conditions 18 and 19 are recorded satisfied
+  against MCAA-260's branch; no condition text and no decision changes)
+- Date: 2026-09-28 (revisions 3-9; revisions 1-2 dated 2026-09-27)
 - Deciders: Principal Platform Architect
 - Second reviewer, revision 2: Workflow & Eventing Engineer -- MCAA-264,
   *approve-with-conditions*. All six blocking conditions (B1-B6) are applied; see
@@ -28,20 +28,29 @@
   revisions 4-7: two of its sub-clauses were answered in D9 prose but never became
   conditions, so nobody owned them. Conditions 20-21 fix that. No second review is
   required: both tighten this record's own keeps and neither moves a boundary.
+  Revision 9 comes from MCAA-356 and changes no decision and no condition text: it
+  records conditions 18 and 19 satisfied at the commits that satisfied them, and
+  retires three sentences in this header and the index that described a divergence
+  PR #7 has since closed. Recording satisfaction is not a second review; the code
+  was checked against the condition, which is the standard the conditions preamble
+  sets.
 - **Numbering, canonical.** This record is ADR **0002**. ADR **0001** is
   "Remote client mode, tenant binding and opt-in shared scope" (PR #6). MCAA-348's
   review cites this document as `0001-remote-corpus-api-and-mcp-contract.md` and
   MCAA-346 cites ADR 0001 as `0001-remote-client-mode-and-shared-scope.md`: both
   citations predate the renumbering in revision 5, and **only the second one still
-  resolves**. Two open PRs carry this document at two paths -- PR #4 at
-  `docs/adr/0002-...` (this file, revision 7) and PR #7 at
-  `docs/adr/0001-remote-corpus-api-and-mcp-contract.md` (a stale revision-2 copy,
-  plus an index row mapping 0001 to the corpus ADR). Merging both would land two
-  files numbered 0001 and two copies of this decision at different revisions.
-  Condition 19 resolves it: PR #7 deletes its copy and its index row.
+  resolves**. This record lives on PR #4 at `docs/adr/0002-...` (this file). PR #7
+  briefly carried a second copy at
+  `docs/adr/0001-remote-corpus-api-and-mcp-contract.md` at revision 2, plus an index
+  row mapping 0001 to the corpus ADR; merging both would have landed two files
+  numbered 0001 and two copies of this decision at different revisions. Condition 19
+  closed it: PR #7 deleted the copy at `e2c3bc38` and took this directory whole from
+  PR #4, so `docs/adr/` is now identical on both branches and PR #4 remains the only
+  author of the record.
 - Machine-readable contract: [`src/server/contracts/corpus-v1.ts`](../../src/server/contracts/corpus-v1.ts)
-  (this branch carries the pre-condition-16 shape; the two mutually exclusive
-  member schemas land on MCAA-260's branch at `3b8f002f`)
+  (this branch carries the pre-condition-16 shape; the mutually exclusive member
+  schemas land on MCAA-260's branch at `3b8f002f` and the corpus-level ones at
+  `e2c3bc38`, per conditions 16 and 18)
 - Compatibility tests: [`tests/contracts/corpus-v1.test.ts`](../../tests/contracts/corpus-v1.test.ts)
 
 ## Context
@@ -1126,6 +1135,29 @@ describing the old code went stale.
     row, not member provenance -- but it must stop being the input to any projection
     decision. This is a contract-shape gate on the same merge of PR #7 as conditions
     10-17, not a behaviour change: no field gains a new meaning.
+
+    **Satisfied at `e2c3bc38`, test at `4bb84713`** (recorded in revision 9, checked
+    against MCAA-260's branch at `ea76c139`): `corpus-v1.ts` states
+    `CorpusOwnerSummarySchema` (`projectId` and `filterDigest` required) and
+    `CorpusProjectedSummarySchema` (`CorpusBaseSchema.strict()`, neither field
+    present), with `CorpusOwnerDetailSchema` adding a required `filter` and
+    `CorpusProjectedDetailSchema` omitting it; `CorpusSummarySchema` and
+    `CorpusDetailSchema` are unions of the two. Requiring the fields *together* on
+    the owner variant is what carries the rule: a row keeping one and dropping
+    another fails the owner variant on the missing field and the projected variant on
+    strictness, so a half-projected corpus is unstateable rather than merely
+    discouraged. `CORPUS_PROVENANCE_FIELDS` names the three denied fields so the list
+    and the schemas cannot drift. `foreign` stays required on the base with a comment
+    stating it is a read-time fact and not the input to any projection decision, which
+    is what condition 10 asked of it. `CORPUS_CONTRACT_VERSION` stays `1`, correctly:
+    no field gained a meaning. The required test is
+    `it.each(CORPUS_PROVENANCE_FIELDS)('rejects %s on a projected corpus')`, which is
+    stronger than the single case asked for because it is driven off the deny list.
+    Two additions past the condition's text, both accepted: `CorpusProjectedDetail`
+    admits only `CorpusProjectedSourceSchema[]`, so an owner member row inside a
+    corpus the reader does not own is unstateable rather than merely unreachable
+    (this is condition 16's rule expressed in the type rather than trusted to
+    `serializeSource`); and a half-projected case is tested directly.
 19. **One number per ADR, one copy per decision.** This record is ADR 0002 and ADR
     0001 is the remote-client-mode record; see "Numbering, canonical" in the header.
     MCAA-260's branch must delete `docs/adr/0001-remote-corpus-api-and-mcp-contract.md`
@@ -1135,6 +1167,16 @@ describing the old code went stale.
     decision at different revisions -- and a reader who finds the stale copy reads
     conditions 10-21 as though they do not exist, including the merge gate above.
     The ADR is owned by PR #4; PR #7 carries the implementation only.
+
+    **Satisfied at `e2c3bc38`** (recorded in revision 9, checked against MCAA-260's
+    branch at `ea76c139`): the stale copy is deleted, and `docs/adr/` on PR #7 is
+    `0002-remote-corpus-api-and-mcp-contract.md` plus `README.md` -- byte-identical to
+    this directory, because the engineer took the index from PR #4 by merge rather
+    than hand-editing the row. That is the better fix and worth stating as the
+    precedent: the divergence was a stale copy of the whole index, not one bad row, so
+    re-deriving it from the owning branch is what makes PR #7's diff stop claiming
+    authorship of this record. The only `0001` row remaining maps to ADR 0001, the
+    remote-client-mode record.
 20. **Enforce the observation-id opacity invariant at the writer** -- new in
     revision 8. D9 keeps observation `id` on a projected row *on the condition* that
     ids are opaque, and revisions 4-7 assigned that condition to nobody. At
