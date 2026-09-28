@@ -413,6 +413,66 @@ describe('MCAA-260 — remote corpus routes', () => {
     expect(queried.json.session_id).toBeNull();
   });
 
+  it('publishes corpus content to another tenant without its provenance', async () => {
+    await writeMemory(keyAPublisher, projectAId, 'shared knowledge: drain the node before rollback', {
+      shared: true,
+      metadata: { agentId: 'agent-alpha-7', sourceAdapter: 'claude' },
+    });
+    const published = await request<CorpusResponse>('POST', corporaPath(projectAId), keyAPublisher, {
+      name: 'rollbacks',
+      shared: true,
+      filter: { scope: 'project' },
+    });
+    expect(published.status).toBe(201);
+    const corpusId = published.json.corpus.id;
+
+    // The owner still sees everything, including where each row came from.
+    const owned = await request<CorpusResponse>(
+      'GET', corporaPath(projectAId, '/rollbacks?include=sources'), keyAPublisher,
+    );
+    expect(owned.json.corpus.projectId).toBe(projectAId);
+    expect(owned.json.corpus.sources![0]!.metadata).toMatchObject({ agentId: 'agent-alpha-7' });
+
+    const byId = await request<CorpusResponse>('GET', `/v1/corpora/${corpusId}?include=sources`, keyB);
+    expect(byId.status).toBe(200);
+    // Content crosses the tenant boundary; provenance does not.
+    expect(byId.json.corpus.sources![0]!.content).toContain('drain the node before rollback');
+    expect(byId.json.corpus.sources![0]).not.toHaveProperty('projectId');
+    expect(byId.json.corpus.sources![0]).not.toHaveProperty('metadata');
+    expect(byId.json.corpus).not.toHaveProperty('projectId');
+    expect(JSON.stringify(byId.json)).not.toContain('agent-alpha-7');
+    expect(JSON.stringify(byId.json)).not.toContain(projectAId);
+  });
+
+  it('never serves an owner-primed render to a foreign reader', async () => {
+    await writeMemory(keyAPublisher, projectAId, 'shared knowledge: restart the operator last', {
+      shared: true,
+      metadata: { agentId: 'agent-alpha-9' },
+    });
+    const published = await request<CorpusResponse>('POST', corporaPath(projectAId), keyAPublisher, {
+      name: 'operator',
+      shared: true,
+      filter: { scope: 'project' },
+    });
+    const corpusId = published.json.corpus.id;
+
+    // Priming caches a render keyed on membership alone. Without a viewer
+    // dimension that cached copy -- which carries metadata -- would be handed
+    // straight to tenant B on the next query.
+    const primed = await request('POST', corporaPath(projectAId, '/operator/prime'), keyAPublisher, {});
+    expect(primed.status).toBe(200);
+
+    const queried = await request<QueryResponse>('POST', `/v1/corpora/${corpusId}/query`, keyB, {
+      question: 'what restarts last?',
+    });
+    expect(queried.status).toBe(200);
+
+    const foreignRender = answerCalls.at(-1)!.rendered;
+    expect(foreignRender).toContain('restart the operator last');
+    expect(foreignRender).not.toContain('agent-alpha-9');
+    expect(foreignRender).not.toContain('**Metadata:**');
+  });
+
   it('never exposes a private corpus through the id-addressed route', async () => {
     await writeMemory(keyA, projectAId, 'alpha private runbook');
     const privateCorpus = await request<CorpusResponse>('POST', corporaPath(projectAId), keyA, { name: 'private' });

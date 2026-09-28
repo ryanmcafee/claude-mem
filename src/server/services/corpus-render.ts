@@ -33,13 +33,17 @@ function isoDay(epoch: number): string {
   return new Date(epoch).toISOString().slice(0, 10);
 }
 
-function renderMember(member: PostgresCorpusMember, position: number): string {
+function renderMember(
+  member: PostgresCorpusMember,
+  position: number,
+  redactProvenance: boolean,
+): string {
   const lines: string[] = [];
   lines.push(`## [${member.kind.toUpperCase()}] ${position + 1}`);
   lines.push(`*${isoDay(member.createdAtEpoch)}* | id: ${member.id}`);
   lines.push('');
   lines.push(member.content);
-  const metadataKeys = Object.keys(member.metadata).sort();
+  const metadataKeys = redactProvenance ? [] : Object.keys(member.metadata).sort();
   if (metadataKeys.length > 0) {
     lines.push('');
     lines.push(`**Metadata:** ${metadataKeys.map(key => `${key}=${JSON.stringify(member.metadata[key])}`).join(', ')}`);
@@ -68,6 +72,8 @@ export function renderCorpus(input: {
   description: string;
   filter: CorpusFilter;
   members: readonly PostgresCorpusMember[];
+  /** Drop publisher-controlled metadata; set for a reader outside the owning tenant. */
+  redactProvenance?: boolean;
 }): RenderedCorpus {
   const summary = summarizeMembers(input.members);
   const header = [
@@ -82,7 +88,9 @@ export function renderCorpus(input: {
     '---',
     '',
   ].join('\n');
-  const body = input.members.map((member, index) => renderMember(member, index)).join('\n\n');
+  const body = input.members
+    .map((member, index) => renderMember(member, index, input.redactProvenance === true))
+    .join('\n\n');
   const rendered = `${header}${body}${body.length > 0 ? '\n' : ''}`;
   return {
     systemPrompt: buildSystemPrompt({ ...input, summary }),

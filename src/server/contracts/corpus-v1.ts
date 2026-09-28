@@ -240,7 +240,8 @@ export const CorpusStatsSchema = z.object({
 
 export const CorpusSummarySchema = z.object({
   id: z.string().min(1),
-  projectId: z.string().min(1),
+  /** Omitted when `foreign` is true: the owner's project id is provenance, not published content. */
+  projectId: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string(),
   shared: z.boolean(),
@@ -264,16 +265,20 @@ export const CorpusSummarySchema = z.object({
 export type CorpusSummary = z.infer<typeof CorpusSummarySchema>;
 
 /**
- * Member rows, returned only for `?include=sources`. Safe on a foreign shared
- * corpus because a shared corpus may only contain already-shared observations
- * (ADR D3) -- the same rows POST /v1/search { scope: 'shared' } would return.
+ * Member rows, returned only for `?include=sources`. A shared corpus may only
+ * contain already-shared observations (ADR D3), so the content is publishable --
+ * but publishing shares content, not provenance. Outside the owning tenant these
+ * rows carry the same redaction POST /v1/search { scope: 'shared' } applies
+ * (MCAA-281): `projectId` and `metadata` are omitted.
  */
 export const CorpusSourceSchema = z.object({
   id: z.string().min(1),
-  projectId: z.string().min(1),
+  /** Omitted on a foreign corpus: caller-supplied text, usually a repo or directory name. */
+  projectId: z.string().min(1).optional(),
   kind: z.string().min(1),
   content: z.string(),
-  metadata: z.record(z.string(), z.unknown()),
+  /** Omitted on a foreign corpus: publisher-controlled JSON, stamped with the publishing agent's id. */
+  metadata: z.record(z.string(), z.unknown()).optional(),
   shared: z.boolean(),
   /** Render index, derived from CORPUS_MEMBER_ORDER at read time, not stored. */
   position: z.number().int().nonnegative(),

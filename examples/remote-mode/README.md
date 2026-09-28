@@ -124,6 +124,18 @@ themselves shared. A build or rebuild that would include a private row is
 refused with `422 SharedCorpusPrivateMembers` and the disqualifying count; it is
 never silently filtered down or downgraded to private.
 
+### What a published corpus gives another tenant
+
+Publishing a corpus shares content, not provenance, on the same rule a shared
+observation read follows. Reading a corpus you do not own (`foreign: true`) omits
+the corpus's `projectId`, and each `?include=sources` row omits `projectId` and
+`metadata` — `projects.id` is caller-supplied text, usually a repository or
+directory name, and `metadata` is publisher-controlled JSON that the write path
+stamps with the publishing agent's id. `query_corpus` answers the same way: the
+rendered text a foreign reader is answered from carries no metadata, and a render
+cached by the owner's `prime_corpus` is never served across the boundary. Reading
+your own corpus is unaffected.
+
 Two ceilings apply at build and rebuild, each with a `reason` so you know which
 fix applies: more than 2000 matched rows is `422 CorpusTooLarge`
 (`reason: "members"` — narrow the filter), and a render over 400,000 estimated
