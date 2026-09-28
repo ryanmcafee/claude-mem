@@ -901,8 +901,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         shared: z.boolean().optional(),
         // MCAA-241 — caller-supplied dedup key, unique per (team, project). A
         // repeat write returns the stored row with `created: false` and changes
-        // nothing, which is what makes the SQLite import re-runnable.
-        idempotencyKey: z.string().min(1).max(512).optional(),
+        // nothing, which is what makes the SQLite import re-runnable. Trimming
+        // here keeps normalization in one place, so a whitespace-only key is a
+        // 400 rather than collapsing into the bare `client:v1:` prefix.
+        idempotencyKey: z.string().trim().min(1).max(512).optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -935,6 +937,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           const { observation, created } = await repo.createIfAbsent(createInput);
           if (created) {
             await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
+          } else {
+            // A no-op must not log `memory.write`, but silence is
+            // indistinguishable from a dropped audit write and hides key probing.
+            await this.auditWrite(req, 'memory.write.duplicate', observation.id, observation.projectId);
           }
           res.status(created ? 201 : 200).json({
             memory: serializeObservation(observation),
@@ -1953,6 +1959,7 @@ function resolveAuditResourceType(action: string): string {
     'session.write': 'server_session',
     'session.end': 'server_session',
     'memory.write': 'observation',
+    'memory.write.duplicate': 'observation',
     'observation.read': 'observation',
     'observation.search': 'observation',
     'observation.context': 'observation',
