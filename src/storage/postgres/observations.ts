@@ -79,22 +79,37 @@ interface ObservationSourceRow {
   created_at: Date;
 }
 
+export interface ObservationCreateInput {
+  id?: string;
+  projectId: string;
+  teamId: string;
+  serverSessionId?: string | null;
+  kind?: string;
+  content: string;
+  generationKey?: string | null;
+  metadata?: JsonObject;
+  embedding?: JsonValue | null;
+  createdByJobId?: string | null;
+  shared?: boolean;
+}
+
 export class PostgresObservationRepository {
   constructor(private client: PostgresQueryable) {}
 
-  async create(input: {
-    id?: string;
-    projectId: string;
-    teamId: string;
-    serverSessionId?: string | null;
-    kind?: string;
-    content: string;
-    generationKey?: string | null;
-    metadata?: JsonObject;
-    embedding?: JsonValue | null;
-    createdByJobId?: string | null;
-    shared?: boolean;
-  }): Promise<PostgresObservation> {
+  async create(input: ObservationCreateInput): Promise<PostgresObservation> {
+    const { observation } = await this.createIfAbsent(input);
+    return observation;
+  }
+
+  /**
+   * Same write as `create`, but it also reports whether the row was inserted or
+   * already present. A caller that supplies a `generationKey` (the import path,
+   * MCAA-241) needs that distinction to prove a re-run changed nothing;
+   * `xmax = 0` is true only for a freshly inserted tuple.
+   */
+  async createIfAbsent(
+    input: ObservationCreateInput,
+  ): Promise<{ observation: PostgresObservation; created: boolean }> {
     await assertProjectOwnership(this.client, input.projectId, input.teamId);
     if (input.serverSessionId) {
       await assertSessionOwnership(this.client, input.serverSessionId, input.projectId, input.teamId);
@@ -103,7 +118,7 @@ export class PostgresObservationRepository {
       await assertJobOwnership(this.client, input.createdByJobId, input.projectId, input.teamId);
     }
 
-    const row = await queryOne<ObservationRow>(
+    const row = await queryOne<ObservationRow & { inserted: boolean }>(
       this.client,
       `
         INSERT INTO observations (
@@ -113,7 +128,7 @@ export class PostgresObservationRepository {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
         ON CONFLICT (team_id, project_id, generation_key) WHERE generation_key IS NOT NULL DO UPDATE SET
           updated_at = observations.updated_at
-        RETURNING *
+        RETURNING *, (xmax = 0) AS inserted
       `,
       [
         input.id ?? newId(),
@@ -129,7 +144,7 @@ export class PostgresObservationRepository {
         input.shared ?? false
       ]
     );
-    return mapObservationRow(row!);
+    return { observation: mapObservationRow(row!), created: row!.inserted === true };
   }
 
   async getByIdForScope(input: {
@@ -327,6 +342,18 @@ export class PostgresObservationSourcesRepository {
     );
     return result.rows.map(mapObservationSourceRow);
   }
+}
+
+/**
+ * Namespace for a caller-supplied idempotency key (MCAA-241). Client keys share
+ * the `generation_key` column with the generation pipeline, so they are prefixed
+ * separately: a client cannot craft a key that aliases a generated observation.
+ *
+ * Expects an already-trimmed key; the route schema owns that normalization so a
+ * whitespace-only key fails validation instead of collapsing into the prefix.
+ */
+export function buildClientIdempotencyKey(clientKey: string): string {
+  return `client:v1:${clientKey}`;
 }
 
 export function buildObservationGenerationKey(input: {

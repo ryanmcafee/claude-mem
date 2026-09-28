@@ -147,9 +147,17 @@ export interface ServerAddObservationRequest {
    * silently writing team-private.
    */
   shared?: boolean;
+  /**
+   * Dedup key, unique per team + project (MCAA-241). Sending the same key twice
+   * returns the stored row with `created: false` instead of adding a second one,
+   * which is how the SQLite import stays re-runnable.
+   */
+  idempotencyKey?: string;
 }
 
 export interface ServerAddObservationResponse {
+  /** False when the server already held a row for this `idempotencyKey`. */
+  created?: boolean;
   memory: {
     id: string;
     projectId: string;
@@ -318,22 +326,16 @@ export class ServerClient {
   buildAddObservationPayload(
     input: ServerAddObservationRequest,
   ): Record<string, unknown> {
-    // Write-path contract (#2684): /v1/memories persists a `memory_items` row
-    // whose searchable text lives in `narrative` (the FTS trigger copies it
-    // into memory_items_fts). The MCP `observation_add` surface speaks in terms
-    // of `content`; map it onto `narrative` so the row is never empty and the
-    // FTS index always has something to match. `type` is REQUIRED by
-    // CreateMemoryItemSchema; default it from `kind` so a manual insert that
-    // only supplied content still persists instead of 400-ing.
-    const content = input.content;
-    const kind = input.kind ?? 'manual';
-    const metadataTitle = typeof input.metadata?.title === 'string' ? input.metadata.title : undefined;
+    // Write-path contract: the server runtime's POST /v1/memories writes an
+    // `observations` row whose searchable text is the NOT NULL `content`
+    // column (content_search is generated from it), and requires `content` in
+    // the request body. The earlier `content -> narrative` + `type` mapping
+    // targeted the retired sqlite `memory_items` route, so every remote
+    // `observation_add` was rejected with 400 ValidationError on `content`.
     return {
       projectId: input.projectId,
-      kind,
-      type: kind,
-      narrative: content,
-      ...(metadataTitle ? { title: metadataTitle } : {}),
+      kind: input.kind ?? 'manual',
+      content: input.content,
       ...(input.serverSessionId !== undefined ? { serverSessionId: input.serverSessionId } : {}),
       // Forward the in-session identifiers so the server can resolve the
       // server_sessions row itself; without these the memory lands unlinked.
@@ -343,6 +345,7 @@ export class ServerClient {
       // project/tenant/agent triple without a schema change on every route.
       ...(buildWriteMetadata(input) ?? {}),
       ...(input.shared !== undefined ? { shared: input.shared } : {}),
+      ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
     };
   }
 

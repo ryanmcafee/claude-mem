@@ -247,6 +247,71 @@ jobs:
       - name: Remote client mode (no local worker, no local database)
         run: bun test tests/shared/remote-mode.test.ts tests/shared/remote-mode-no-local-state.test.ts
 
+  # MCAA-241 — the import is only re-runnable because of a unique index plus ON
+  # CONFLICT, and the restore procedure is only real if someone runs it. Both
+  # need a live Postgres, so both block the build here rather than being
+  # asserted in prose.
+  import-and-backup:
+    name: import-and-backup (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: claude_mem_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d claude_mem_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CLAUDE_MEM_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/claude_mem_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: SQLite import (idempotency contract)
+        run: |
+          set -euo pipefail
+          bun test \
+            tests/import/sqlite-import.test.ts \
+            tests/server/runtime/memories-idempotency-routes.test.ts 2>&1 | tee /tmp/import.log
+          if grep -qE '^ *[1-9][0-9]* skip' /tmp/import.log; then
+            echo "Postgres-gated tests skipped — CLAUDE_MEM_TEST_POSTGRES_URL did not reach the suite" >&2
+            exit 1
+          fi
+
+      # pg_dump refuses to dump a newer server, so pin the client to the service
+      # image's major version instead of trusting the runner image's default.
+      - name: Ensure PostgreSQL 16 client tools
+        run: |
+          set -euo pipefail
+          if ! command -v pg_dump > /dev/null \
+            || [ "$(pg_dump --version | grep -oE '[0-9]+' | head -1)" -lt 16 ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-16
+          fi
+          pg_dump --version
+
+      - name: Backup and restore drill (pg_dump -> pg_restore -> verify)
+        run: bun scripts/pg-backup-restore-drill.ts
+
   sync-api:
     name: sync-api (postgres · protocol v2 · matrix e2e)
     runs-on: ubuntu-latest
