@@ -2,12 +2,18 @@
 """Tabulate a Windows tree-kill soak into a per-draw, per-test verdict.
 
 Reads the junit.xml each draw of `.github/workflows/windows-tree-kill-soak.yml`
-uploaded and reports how the tracked tests landed across every draw.
+uploaded and reports how the suite landed across every draw.
 
-Exits non-zero unless every expected draw reported a pass for every tracked
-test. `skipped` and `absent` are failures on purpose: both mean the assertion
-ran zero times, and a run that stayed green on them would look like evidence
-for an acceptance criterion nothing measured.
+Exits non-zero unless every expected draw reported a pass for every test the
+suite declared. `skipped` is a failure on purpose: it means the assertion ran
+zero times, and a run that stayed green on it would look like evidence for an
+acceptance criterion nothing measured.
+
+The tracked set is read from the reports rather than hard-coded, so a test that
+only exists on an unmerged branch is enforced there and does not fail the soak
+on trees that do not carry it. `REQUIRED` is the floor that keeps an empty or
+collapsed report from passing, and cross-draw set agreement catches a test that
+runs on some runners but not others.
 """
 
 from __future__ import annotations
@@ -20,10 +26,7 @@ from pathlib import Path
 
 SUITE = "killProcessTree end-to-end on this platform"
 
-TRACKED = (
-    "kills the root AND its descendant",
-    "reaps a descendant when the root is already gone at call time",
-)
+REQUIRED = ("kills the root AND its descendant",)
 
 
 def expected_draws() -> list[int]:
@@ -47,19 +50,20 @@ def verdict_of(case: ET.Element) -> str:
     return "pass"
 
 
-def read_draw(report: Path) -> dict[str, str]:
-    """Map tracked test name -> verdict for one draw's junit report."""
+def read_draw(report: Path) -> dict[str, str] | str:
+    """Map every suite test name -> verdict, or return why the draw is unreadable."""
+    if not report.is_file():
+        return "no report"
     try:
         root = ET.parse(report).getroot()
     except ET.ParseError as exc:
-        return {name: f"unreadable ({exc})" for name in TRACKED}
+        return f"unreadable ({exc})"
 
-    seen = {
-        case.get("name"): verdict_of(case)
+    return {
+        case.get("name", "<unnamed>"): verdict_of(case)
         for case in root.iter("testcase")
         if case.get("classname") == SUITE
     }
-    return {name: seen.get(name, "absent") for name in TRACKED}
 
 
 def main() -> int:
@@ -67,26 +71,42 @@ def main() -> int:
         sys.exit(f"usage: {sys.argv[0]} <artifact-root>")
     root = Path(sys.argv[1])
 
-    results: dict[int, dict[str, str]] = {}
-    for draw in expected_draws():
-        report = root / f"tree-kill-soak-draw-{draw}" / "junit.xml"
-        results[draw] = (
-            read_draw(report)
-            if report.is_file()
-            else {name: "no report" for name in TRACKED}
+    reads = {
+        draw: read_draw(root / f"tree-kill-soak-draw-{draw}" / "junit.xml")
+        for draw in expected_draws()
+    }
+    usable = {draw: row for draw, row in reads.items() if isinstance(row, dict)}
+    names = sorted({name for row in usable.values() for name in row})
+
+    adverse = [f"draw {draw}: {row}" for draw, row in sorted(reads.items()) if isinstance(row, str)]
+    for draw, row in sorted(usable.items()):
+        if not row:
+            adverse.append(f"draw {draw}: reported zero tests for {SUITE!r}")
+            continue
+        adverse.extend(
+            f"draw {draw}: required test absent -> {name}" for name in REQUIRED if name not in row
         )
+        adverse.extend(
+            f"draw {draw}: test other draws ran is absent here -> {name}"
+            for name in names
+            if name not in row
+        )
+        adverse.extend(f"draw {draw}: {name} -> {row[name]}" for name in sorted(row) if row[name] != "pass")
 
     lines = ["## Windows tree-kill soak", ""]
-    for name in TRACKED:
-        passes = sum(1 for row in results.values() if row[name] == "pass")
+    if not names:
+        lines.extend([f"No draw reported a test for `{SUITE}`.", ""])
+    for name in names:
+        passes = sum(1 for row in usable.values() if row.get(name) == "pass")
         lines.append(f"### {name}")
         lines.append("")
-        lines.append(f"**{passes}/{len(results)} draws passed**")
+        lines.append(f"**{passes}/{len(reads)} draws passed**")
         lines.append("")
         lines.append("| draw | verdict |")
         lines.append("| --- | --- |")
-        for draw, row in sorted(results.items()):
-            lines.append(f"| {draw} | {row[name]} |")
+        for draw, row in sorted(reads.items()):
+            got = row if isinstance(row, str) else row.get(name, "absent")
+            lines.append(f"| {draw} | {got} |")
         lines.append("")
 
     report = "\n".join(lines)
@@ -96,19 +116,13 @@ def main() -> int:
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write(report + "\n")
 
-    adverse = [
-        f"draw {draw}: {name} -> {row[name]}"
-        for draw, row in sorted(results.items())
-        for name in TRACKED
-        if row[name] != "pass"
-    ]
     if adverse:
         print("\nSoak did not hold:", file=sys.stderr)
         for entry in adverse:
             print(f"  {entry}", file=sys.stderr)
         return 1
 
-    print(f"\nAll {len(results)} draws passed every tracked test.")
+    print(f"\nAll {len(reads)} draws passed every one of the {len(names)} tests the suite declared.")
     return 0
 
 
