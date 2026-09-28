@@ -338,8 +338,14 @@ export class CorpusService {
       : await this.requireVisibleCorpus(caller, input.corpusId ?? '');
     const members = await this.loadMembers(caller, corpus);
     const contentDigest = corpusContentDigest(members.map(toIdentity));
+    const foreign = corpus.teamId !== caller.teamId;
 
-    const stored = await this.repo.getArtifact({ corpusId: corpus.id, contentDigest });
+    // The artifact cache is keyed on membership alone, so an owner's render --
+    // which carries each member's metadata -- would otherwise be served verbatim
+    // to a foreign reader. A foreign read renders fresh and is never persisted.
+    const stored = foreign
+      ? null
+      : await this.repo.getArtifact({ corpusId: corpus.id, contentDigest });
     let artifactId = stored?.id ?? ephemeralArtifactId(contentDigest);
     let systemPrompt = stored?.systemPrompt ?? '';
     let renderedText = stored?.rendered ?? '';
@@ -351,10 +357,13 @@ export class CorpusService {
         description: corpus.description,
         filter: corpus.filter,
         members,
+        redactProvenance: foreign,
       });
       systemPrompt = rendered.systemPrompt;
       renderedText = rendered.rendered;
-      const persisted = await this.persistArtifact(corpus.id, contentDigest, rendered);
+      const persisted = foreign
+        ? null
+        : await this.persistArtifact(corpus.id, contentDigest, rendered);
       artifactId = persisted?.id ?? ephemeralArtifactId(contentDigest);
     }
 
@@ -393,12 +402,15 @@ export class CorpusService {
     options: { includeSources: boolean },
   ): Promise<CorpusDetailView> {
     const members = await this.loadMembers(caller, corpus);
+    const foreign = corpus.teamId !== caller.teamId;
     return this.toDetail(corpus, {
       teamId: caller.teamId,
       members,
       primedAtEpoch: await this.repo.latestPrimedAt(corpus.id),
       contentDigest: corpusContentDigest(members.map(toIdentity)),
-      ...(options.includeSources ? { sources: members.map(serializeSource) } : {}),
+      ...(options.includeSources
+        ? { sources: members.map((member, index) => serializeSource(member, index, foreign)) }
+        : {}),
     });
   }
 
@@ -488,14 +500,17 @@ export class CorpusService {
       earliestAtEpoch: live ? live.earliestAtEpoch : nullableNumber(storedStats.earliestAtEpoch),
       latestAtEpoch: live ? live.latestAtEpoch : nullableNumber(storedStats.latestAtEpoch),
     };
+    const foreign = corpus.teamId !== context.teamId;
     return {
       id: corpus.id,
-      projectId: corpus.projectId,
+      // Same rule as the member rows: the owner's project id is provenance, not
+      // published content, so a foreign reader addresses the corpus by id only.
+      ...(foreign ? {} : { projectId: corpus.projectId }),
       name: corpus.name,
       description: corpus.description,
       shared: corpus.shared,
       memberScope: corpus.memberScope,
-      foreign: corpus.teamId !== context.teamId,
+      foreign,
       stats,
       filterDigest: corpus.filterDigest,
       contentDigest: context.contentDigest,
@@ -527,13 +542,22 @@ function toIdentity(member: PostgresCorpusMember): { id: string; updatedAtEpoch:
   return { id: member.id, updatedAtEpoch: member.updatedAtEpoch, shared: member.shared };
 }
 
-function serializeSource(member: PostgresCorpusMember, index: number): Record<string, unknown> {
+/**
+ * A member row as this reader may see it. Publishing shares content, not
+ * provenance: `projectId` is caller-supplied text (usually a repo or directory
+ * name) and `metadata` is publisher-controlled JSON stamped with the publishing
+ * agent's id, so both are omitted outside the owning tenant (MCAA-281).
+ */
+function serializeSource(
+  member: PostgresCorpusMember,
+  index: number,
+  foreign: boolean,
+): Record<string, unknown> {
   return {
     id: member.id,
-    projectId: member.projectId,
+    ...(foreign ? {} : { projectId: member.projectId, metadata: member.metadata }),
     kind: member.kind,
     content: member.content,
-    metadata: member.metadata,
     shared: member.shared,
     position: index,
     createdAtEpoch: member.createdAtEpoch,

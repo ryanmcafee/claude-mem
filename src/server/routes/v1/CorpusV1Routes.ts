@@ -279,7 +279,9 @@ export function registerCorpusRoutes(app: Application, deps: CorpusRouteDeps): v
         corpusId,
         { includeSources: parsed.data.include === 'sources' },
       );
-      await audit(req, 'corpus.read', corpus.id, corpus.projectId, {
+      // A foreign corpus no longer carries the owner's project id, so the audit
+      // records the scope the caller acted under, as the id-addressed query does.
+      await audit(req, 'corpus.read', corpus.id, corpus.projectId ?? req.authContext?.projectId ?? null, {
         mode: 'get', via: 'id', foreign: corpus.foreign,
       });
       res.status(200).json({ corpus });
