@@ -36,7 +36,6 @@
     "tests/infrastructure/cleanup-v12_4_3.test.ts",
     "tests/install-error-matrix.test.ts",
     "tests/integration/hook-execution-e2e.test.ts",
-    "tests/integration/worker-api-endpoints.test.ts",
     "tests/integrations/telegram-wrapup-notifier.test.ts",
     "tests/plugin-version-check.test.ts",
     "tests/sdk/hardened-options-thinking.test.ts",
