@@ -21,7 +21,24 @@ import { WorkerService } from '../../src/services/worker-service.js';
 import {
   recordDependencyStatus,
   resetDependencyStatusesForTesting,
+  type DependencyHealthSnapshot,
 } from '../../src/shared/dependency-health.js';
+import { readJson } from '../helpers/http-json.js';
+
+interface HealthBody {
+  status: string;
+  initialized: boolean;
+  mcpReady: boolean;
+  platform: string;
+  pid: number;
+  dependencies: DependencyHealthSnapshot;
+}
+
+interface ReadinessBody {
+  status: string;
+  mcpReady?: boolean;
+  message?: string;
+}
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
 const serialIt = it.serial;
@@ -83,7 +100,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await readJson<HealthBody>(response);
         expect(body).toHaveProperty('status', 'ok');
         expect(body).toHaveProperty('initialized', true);
         expect(body).toHaveProperty('mcpReady', true);
@@ -107,7 +124,7 @@ describe('Worker API Endpoints Integration', () => {
         await server.listen(testPort, '127.0.0.1');
 
         const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-        const body = await response.json();
+        const body = await readJson<HealthBody>(response);
 
         expect(body.status).toBe('ok'); 
         expect(body.initialized).toBe(false);
@@ -128,7 +145,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await readJson<HealthBody>(response);
         expect(body.status).toBe('ok');
         expect(body.dependencies).toMatchObject({
           degraded: true,
@@ -152,7 +169,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/readiness`);
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await readJson<ReadinessBody>(response);
         expect(body.status).toBe('ready');
         expect(body.mcpReady).toBe(true);
       });
@@ -173,7 +190,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/readiness`);
         expect(response.status).toBe(503);
 
-        const body = await response.json();
+        const body = await readJson<ReadinessBody>(response);
         expect(body.status).toBe('initializing');
         expect(body.message).toContain('initializing');
       });
@@ -187,7 +204,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/version`);
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await readJson<{ version: string }>(response);
         expect(body).toHaveProperty('version');
         expect(typeof body.version).toBe('string');
       });
@@ -213,7 +230,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/settings/dependency-health`);
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await readJson<DependencyHealthSnapshot>(response);
         expect(body).toMatchObject({
           degraded: true,
           statuses: [
@@ -244,7 +261,7 @@ describe('Worker API Endpoints Integration', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/admin/doctor`);
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<{ health: { dependencies: DependencyHealthSnapshot } }>(response);
       expect(body.health.dependencies).toMatchObject({
         degraded: true,
         statuses: [
@@ -267,7 +284,7 @@ describe('Worker API Endpoints Integration', () => {
         const response = await fetch(`http://127.0.0.1:${testPort}/api/unknown-endpoint`);
         expect(response.status).toBe(404);
 
-        const body = await response.json();
+        const body = await readJson<{ error: string }>(response);
         expect(body.error).toBe('NotFound');
       });
 
@@ -372,13 +389,13 @@ describe('Worker API Endpoints Integration', () => {
       await server.listen(testPort, '127.0.0.1');
 
       let response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      let body = await response.json();
+      let body = await readJson<HealthBody>(response);
       expect(body.mcpReady).toBe(false);
 
       mcpReady = true;
 
       response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      body = await response.json();
+      body = await readJson<HealthBody>(response);
       expect(body.mcpReady).toBe(true);
     });
   });
