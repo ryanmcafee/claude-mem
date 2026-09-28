@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Deterministic corpus rendering (MCAA-260, ADR 0001 D4).
+// Deterministic corpus rendering (MCAA-260, ADR 0002 D4).
 //
 // Priming is not an LLM operation: the same ordered member set always renders
 // to the same bytes, which is what makes the content digest a usable cache key
@@ -99,9 +99,16 @@ export function renderCorpus(input: {
   };
 }
 
+/**
+ * The selection is the owner's, so a redacted render describes the corpus
+ * without it: `query`, `kinds` and `platformSource` state what the owner
+ * searched for, and `query` is free text (ADR 0002 condition 13). The member
+ * count and date range stay -- both are recomputed over the projected members.
+ */
 function buildSystemPrompt(input: {
   name: string;
   filter: CorpusFilter;
+  redactProvenance?: boolean;
   summary: Omit<CorpusRenderStats, 'tokenEstimate'>;
 }): string {
   const parts: string[] = [
@@ -109,13 +116,14 @@ function buildSystemPrompt(input: {
     + ` from the "${input.name}" corpus.`,
     '',
   ];
-  if (input.filter.kinds && input.filter.kinds.length > 0) {
+  const describeSelection = input.redactProvenance !== true;
+  if (describeSelection && input.filter.kinds && input.filter.kinds.length > 0) {
     parts.push(`Observation kinds included: ${input.filter.kinds.join(', ')}`);
   }
-  if (input.filter.query) {
+  if (describeSelection && input.filter.query) {
     parts.push(`Built from the search: ${input.filter.query}`);
   }
-  if (input.filter.platformSource) {
+  if (describeSelection && input.filter.platformSource) {
     parts.push(`Platform source: ${input.filter.platformSource}`);
   }
   if (input.summary.earliestAtEpoch !== null && input.summary.latestAtEpoch !== null) {
