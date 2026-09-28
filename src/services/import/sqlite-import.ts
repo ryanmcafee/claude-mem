@@ -326,8 +326,13 @@ async function writeRow(input: {
   }
 }
 
-function selectObservations(db: Database, sourceProjects?: string[]): ObservationRow[] {
-  if (!tableExists(db, 'observations')) return [];
+/**
+ * Streams rather than materializing: a long-lived local database can hold tens
+ * of thousands of observations, and loading them all before the first write
+ * would make the import's memory use grow with the user's history.
+ */
+function selectObservations(db: Database, sourceProjects?: string[]): IterableIterator<ObservationRow> {
+  if (!tableExists(db, 'observations')) return [][Symbol.iterator]();
   const columns = availableColumns(db, 'observations');
   const select = [
     'o.id AS id',
@@ -352,11 +357,11 @@ function selectObservations(db: Database, sourceProjects?: string[]): Observatio
     .query<ObservationRow, string[]>(
       `SELECT ${select} FROM observations o ${sessionJoin(db)} ${filter.sql} ORDER BY o.id ASC`,
     )
-    .all(...filter.params);
+    .iterate(...filter.params);
 }
 
-function selectSummaries(db: Database, sourceProjects?: string[]): SummaryRow[] {
-  if (!tableExists(db, 'session_summaries')) return [];
+function selectSummaries(db: Database, sourceProjects?: string[]): IterableIterator<SummaryRow> {
+  if (!tableExists(db, 'session_summaries')) return [][Symbol.iterator]();
   const columns = availableColumns(db, 'session_summaries');
   const select = [
     'o.id AS id',
@@ -379,7 +384,7 @@ function selectSummaries(db: Database, sourceProjects?: string[]): SummaryRow[] 
     .query<SummaryRow, string[]>(
       `SELECT ${select} FROM session_summaries o ${sessionJoin(db)} ${filter.sql} ORDER BY o.id ASC`,
     )
-    .all(...filter.params);
+    .iterate(...filter.params);
 }
 
 /**
