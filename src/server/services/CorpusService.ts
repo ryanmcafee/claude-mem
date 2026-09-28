@@ -422,7 +422,7 @@ export class CorpusService {
   private loadMembers(caller: CorpusCaller, corpus: PostgresCorpus): Promise<PostgresCorpusMember[]> {
     return this.repo.listMembers({
       corpusId: corpus.id,
-      readerProjectId: corpus.projectId,
+      readerProjectId: authorizedReadProject(caller, corpus) ?? '',
       readerTeamId: caller.teamId,
     });
   }
@@ -536,6 +536,25 @@ export class CorpusService {
       ...(context.sources ? { sources: context.sources } : {}),
     };
   }
+}
+
+/**
+ * The one project this read is authorized to see whole, or null when no project
+ * is. `loadMembers()` used the corpus's project while the id-addressed REST
+ * routes pass an empty project for a team-wide key; those were two competing
+ * ownership definitions, so they collapse here (ADR D9, condition 10).
+ *
+ * A project-scoped key keeps its binding and never gains a sibling project. A
+ * team-wide key resolves the corpus's project only within its own team, which is
+ * the authorization check that makes that resolution safe.
+ */
+export function authorizedReadProject(
+  caller: CorpusCaller,
+  corpus: Pick<PostgresCorpus, 'teamId' | 'projectId'>,
+): string | null {
+  if (caller.projectScope) return caller.projectScope;
+  if (caller.projectId) return caller.projectId;
+  return corpus.teamId === caller.teamId ? corpus.projectId : null;
 }
 
 function toIdentity(member: PostgresCorpusMember): { id: string; updatedAtEpoch: number; shared: boolean } {
