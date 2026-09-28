@@ -228,24 +228,57 @@ reason its SQL makes the shared branch unreachable.
 
 This is not hypothetical. The corpus surface (MCAA-260, PR #7) is a second read path over the same
 rows: `?include=sources` returns member bodies, and `query_corpus` renders every member into the
-text a foreign reader is answered from. Its author found and fixed the bypass -- including the
-non-obvious one, that the render cache is keyed on the membership digest with no viewer dimension,
-so an owner's primed render would have been served verbatim to another tenant. Good catch, and the
-field set it produces today is correct.
+text a foreign reader is answered from. Its author found and fixed the cross-tenant *container*
+case, including the non-obvious one -- the render cache is keyed on the membership digest with no
+viewer dimension, so an owner's primed render would have been served verbatim to another tenant.
 
-It is nonetheless a **second implementation of one rule**, and two things must be reconciled before
-the enablement gate (condition 4 below):
+**Revised 2026-09-28: that redaction is applied to the wrong subject, and the resulting disclosure
+is reachable.** Two independent reviews reached the same conclusion from source -- the Workflow &
+Eventing Engineer's trace on MCAA-281 and the second security review on MCAA-348 -- and I confirmed
+every step below by reading `d087e0a2`. The ownership test is computed on the container, then applied
+to rows the container's own build predicate deliberately admitted from other tenants:
 
-- **Its rule is shaped as a denylist, this one as an allowlist.** `serializeSource` spreads
-  `foreign ? {} : { projectId, metadata }` -- it names what to withhold. The projection names what
-  to emit, against a deliberately empty `SHARED_METADATA_ALLOWLIST`. Add a column to `observations`
-  tomorrow and the search path keeps it private by default while the corpus path publishes it by
-  default. The divergence is in the shape of the rule, not in today's output, which is exactly the
-  kind of defect that stays invisible until the commit that triggers it.
-- **The ownership tests differ.** The corpus path tests `corpus.teamId !== caller.teamId`; this
-  projection tests team **and** project, because a same-team row outside the queried project also
-  arrived through the shared branch. Either the corpus path adopts the same two-part test, or this
-  ADR records why a corpus is addressed differently from the rows inside it.
+```
+foreign  =  corpus.teamId !== caller.teamId          CorpusService.ts:341, :405, :503
+breadth  =  ((observations.project_id = $p AND observations.team_id = $t)
+             OR ($shared AND observations.shared))   corpora.ts:186-187   <- no team predicate
+```
+
+So an ordinary `memories:read` + `memories:write` caller -- no `memories:write:shared`, no
+`CLAUDE_MEM_INCLUDE_SHARED` -- builds a corpus in **its own** project with
+`{ shared: false, filter: { scope: "shared" } }`. `breadth` is `'shared'` independently of
+`request.shared`, and the `shared && privateMemberCount > 0` guard constrains *publishing*, not
+member breadth, so nothing rejects it. The member set now holds every tenant's shared rows while the
+`corpora` row is the caller's, `foreign` is therefore `false`, and
+`serializeSource(member, i, false)` spreads `{ projectId, metadata }` for every member --
+handing the caller another tenant's project id and the `metadata.agentId` the write path injected.
+`listMembers` re-applies `OR observations.shared` unconditionally, so the rows are still there at
+read time.
+
+The answer path carries the same defect and **persists** it: `redactProvenance: foreign` is false,
+`renderMember` emits metadata values (not just keys) into the text `query_corpus` answers from, and
+because `foreign` is false that render is written to `corpus_artifacts`. The cache fix closed the
+opposite direction -- an owner's render served *to* a foreign reader -- not a foreign member's
+provenance entering an owner's render. Remediation is therefore code **plus** a purge of
+already-primed artifacts.
+
+Nothing is deployed: no manifest mints a `memories:write:shared` key, so no cross-tenant shared row
+exists anywhere to leak (the same fact that carries the ratification below). This is a design defect
+with no live exposure, and the reason it is still merge-blocking is that the data precondition is
+exactly what MCAA-286 turns on. The contract's own justification for the field set --
+"the same rows `POST /v1/search { scope: 'shared' }` would return", `corpus-v1.ts` -- is now false
+and must be corrected with the code.
+
+Root cause: this is a **second implementation of one rule**, and the two implementations disagree in
+both shape and subject.
+
+- **Denylist vs allowlist.** `serializeSource` spreads `foreign ? {} : { projectId, metadata }` --
+  it names what to withhold. The projection names what to emit, against a deliberately empty
+  `SHARED_METADATA_ALLOWLIST`. Add a column to `observations` tomorrow and the search path keeps it
+  private by default while the corpus path publishes it by default.
+- **The subject of the test.** The corpus path tests who owns the *corpus*; the projection tests the
+  *row* -- team **and** project, because a same-team row outside the queried project also arrived
+  through the shared branch. Only the row-level test is sound for a mixed-provenance member set.
 
 ## Ratification: reducing the cross-tenant row is not a breaking change
 
@@ -292,12 +325,42 @@ migration path. The conditions below exist because deciding now is free and deci
 3. **The owner view must stay byte-identical to the shape recorded above.** That equality is what
    makes this change non-breaking, so it is the first thing a future reviewer should check when the
    projection is touched.
-4. **The corpus surface reconciles onto the single projection.** `serializeSource` and
-   `renderCorpus`'s `redactProvenance` branch must produce the shared view by calling
-   `serializeObservationForViewer`, not by re-deriving it, and must adopt the team-and-project
-   ownership test -- or this ADR records why a corpus differs. Cheap now, because PR #7 rebases
-   onto the projection anyway; expensive after enablement, when two paths with drifting rules are
-   both shipped contracts.
+4. **The corpus surface reconciles onto the single projection.** ~~Carried to the enablement
+   gate.~~ **Upgraded 2026-09-28 to a condition on merging PR #7**, because the divergence is not
+   only a shape difference: it discloses another tenant's `projectId` and `metadata` to an ordinary
+   read/write caller, and persists that disclosure in `corpus_artifacts`. See the revised finding
+   above. Required, and ordered:
+
+   1. **Merge order is projection first.** PR #8 lands, PR #7 rebases onto it. The reverse order
+      puts an independently vulnerable surface on `main`, and a temporary second redaction
+      implementation is not acceptable as a bridge.
+   2. **`serializeSource` and `renderCorpus`'s `redactProvenance` branch produce the shared view by
+      calling `serializeObservationForViewer`**, not by re-deriving it.
+   3. **It is not one import.** The earlier wording of this condition said the third copy
+      disappears with an import; that is wrong, and the correction matters because a rebase can
+      appear to satisfy the wrong version. `serializeObservationForViewer` decides via
+      `isOwnerAuthorizedView(row, viewer)`, which needs `row.teamId` -- and the corpus member row
+      has none: `MemberRow` is `{ id, project_id, kind, content, metadata, shared, created_at,
+      updated_at }` and the `listMembers` SELECT never projects `observations.team_id`. The
+      per-member decision is currently impossible to express. Reconciling means `listMembers` also
+      selects `observations.team_id`, threading it through `PostgresCorpusMember`, and only then
+      calling the projection per member.
+   4. **The ownership test is per member, not per corpus**, and the viewer is the authenticated
+      reader's team plus the project that reader is authorized for -- never the corpus's team, and
+      never a project read off the container. Corpus-level authorization stays separate from member
+      projection.
+   5. **Purge `corpus_artifacts` as part of the fix.** The leak is stored state, so a code fix alone
+      leaves primed renders that already contain foreign provenance.
+   6. **Correct the contract comment** in `corpus-v1.ts` that justifies the member field set as
+      parity with `POST /v1/search { scope: "shared" }`. That premise is what made the defect read
+      as already handled.
+
+   The second security review on MCAA-348 attaches further first-release conditions to this surface
+   that go beyond response fields -- metadata *inference* channels (`metadataMatch` applied to
+   foreign rows, membership counts), the unkeyed `corpusFilterDigest`, and derived statistics such
+   as `tokenEstimate` computed from renders that included private metadata. Those belong to the
+   corpus contract record (MCAA-259), not to this ADR, and folding them in is my next action there.
+   They are gates on the corpus surface, not on PR #8.
 
 ## Consequences
 
