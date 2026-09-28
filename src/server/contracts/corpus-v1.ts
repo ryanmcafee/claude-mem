@@ -238,18 +238,32 @@ export const CorpusStatsSchema = z.object({
   latestAtEpoch: z.number().int().nonnegative().nullable(),
 }).strict();
 
-export const CorpusSummarySchema = z.object({
+/**
+ * Corpus-level fields a projected corpus row must never carry. `projectId` is
+ * the owner's provenance; `filter` and `filterDigest` describe how the owner
+ * selected members, which is a statement about their private corpus even when
+ * every member is publishable.
+ */
+export const CORPUS_PROVENANCE_FIELDS = [
+  'projectId',
+  'filter',
+  'filterDigest',
+] as const;
+
+/** Fields every corpus row carries, whoever is reading it. */
+const CorpusBaseSchema = z.object({
   id: z.string().min(1),
-  /** Omitted when `foreign` is true: the owner's project id is provenance, not published content. */
-  projectId: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string(),
   shared: z.boolean(),
   memberScope: CorpusScopeSchema,
-  /** True when the row belongs to another tenant and is visible via scope=shared. */
+  /**
+   * True when the row belongs to another tenant and is visible via scope=shared.
+   * A read-time fact about the corpus, reported so a reader can tell provenance.
+   * It is not the input to any projection decision (ADR D9, condition 10).
+   */
   foreign: z.boolean(),
   stats: CorpusStatsSchema,
-  filterDigest: z.string().min(1),
   contentDigest: z.string().min(1).nullable(),
   /**
    * Always null on the remote server: there is no resumable AI session to
@@ -261,7 +275,27 @@ export const CorpusSummarySchema = z.object({
   primedAtEpoch: z.number().int().nonnegative().nullable(),
   createdAtEpoch: z.number().int().nonnegative(),
   updatedAtEpoch: z.number().int().nonnegative(),
+});
+
+/**
+ * A corpus the reader owns. Provenance is required here, which is what makes
+ * this variant mutually exclusive with the projected one -- optional fields
+ * could not, because an over-sharing projected corpus would still validate.
+ */
+export const CorpusOwnerSummarySchema = CorpusBaseSchema.extend({
+  projectId: z.string().min(1),
+  filterDigest: z.string().min(1),
 }).strict();
+export type CorpusOwnerSummary = z.infer<typeof CorpusOwnerSummarySchema>;
+
+/** A corpus reached through the shared branch: content handles, no provenance. */
+export const CorpusProjectedSummarySchema = CorpusBaseSchema.strict();
+export type CorpusProjectedSummary = z.infer<typeof CorpusProjectedSummarySchema>;
+
+export const CorpusSummarySchema = z.union([
+  CorpusOwnerSummarySchema,
+  CorpusProjectedSummarySchema,
+]);
 export type CorpusSummary = z.infer<typeof CorpusSummarySchema>;
 
 /**
@@ -313,10 +347,25 @@ export const CorpusSourceSchema = z.union([
   CorpusProjectedSourceSchema,
 ]);
 
-export const CorpusDetailSchema = CorpusSummarySchema.extend({
+export const CorpusOwnerDetailSchema = CorpusOwnerSummarySchema.extend({
   filter: CorpusFilterSchema,
   sources: z.array(CorpusSourceSchema).optional(),
 }).strict();
+
+/**
+ * A projected corpus omits the owner's selection as well as their project id, so
+ * a condition-13 response is representable rather than failing its own schema.
+ * Its members can only be projected rows: an owner member row inside a corpus the
+ * reader does not own is the disclosure this variant exists to make unstateable.
+ */
+export const CorpusProjectedDetailSchema = CorpusProjectedSummarySchema.extend({
+  sources: z.array(CorpusProjectedSourceSchema).optional(),
+}).strict();
+
+export const CorpusDetailSchema = z.union([
+  CorpusOwnerDetailSchema,
+  CorpusProjectedDetailSchema,
+]);
 
 export const BuildCorpusResponseSchema = z.object({ corpus: CorpusDetailSchema }).strict();
 export const ListCorporaResponseSchema = z.object({
