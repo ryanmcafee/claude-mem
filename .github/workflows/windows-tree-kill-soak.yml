@@ -100,7 +100,12 @@ jobs:
 
       # A wedged draw is the most informative outcome this soak can produce, so
       # record what is still alive before the runner's orphan sweep reaps it.
-      # On a healthy draw this is empty, which is what makes it readable.
+      #
+      # This is NOT empty on a healthy draw. Measured across 20 green draws in
+      # run 36434109032, every draw leaves two orphaned `ping -n 120` trees --
+      # one of them by design, since `discovers descendants through the
+      # production enumeration` kills only the root. Read this against that
+      # baseline of two, not against zero.
       - name: Surviving processes
         if: always()
         shell: pwsh
