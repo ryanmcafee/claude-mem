@@ -187,8 +187,9 @@ view. One rule covers both, so there is no second path to forget.
 **Owner view** (unchanged from the shape approved in PR #3): `id`, `projectId`, `teamId`,
 `serverSessionId`, `kind`, `content`, `metadata`, `shared`, `createdAtEpoch`, `updatedAtEpoch`.
 
-**Shared view**: `id`, `kind`, `content`, `shared`, `sharedOrigin`, `createdAtEpoch`,
-`updatedAtEpoch`. `teamId`, `projectId`, `serverSessionId` and `metadata` are omitted.
+**Shared view**: `id`, `kind`, `content`, `shared`, `createdAtEpoch`, `updatedAtEpoch`. `teamId`,
+`projectId`, `serverSessionId` and `metadata` are omitted. A shared row carries no publisher
+provenance of any kind, pseudonymized or otherwise.
 
 - `metadata` is omitted **wholesale**, not filtered. Every key on a published row is
   publisher-controlled free-form JSON, the write path injects the publisher's `metadata.agentId`,
@@ -198,11 +199,19 @@ view. One rule covers both, so there is no second path to forget.
   passes a caller-supplied id to the repository, so it carries no provenance. It is also the handle
   a consumer needs for dedup, and owning it does not grant mutation -- cross-tenant delete by id is
   still rejected.
-- `sharedOrigin` is the first 16 hex characters of
-  `sha256("claude-mem:shared-origin:v1:<teamId>:<projectId>")`. It is stable per publishing origin,
-  so a consumer can group results by publisher, and non-invertible, because `teamId` is a 122-bit
-  random UUID. A digest over the project id alone would have been walkable by guessing repository
-  names, which is why the team id is in the preimage.
+- **No origin token.** PR #8 emitted `sharedOrigin`, the first 16 hex characters of
+  `sha256("claude-mem:shared-origin:v1:<teamId>:<projectId>")` -- stable per publisher so results
+  could be grouped, and non-invertible because `teamId` is a 122-bit random UUID. Condition 1 below
+  reserved the decision on whether to keep it. **Decided: dropped.** No consumer reads it -- the
+  field's only references were the projection, an optional client type, one README sentence and the
+  tests pinning it -- and it was the last correlation channel left on a projected row: it lets any
+  authenticated tenant cluster the shared corpus by publisher and count distinct publishers. That is
+  provenance, which is the thing this projection exists to withhold. Adding the field back later is
+  additive and free if a real consumer names the need; removing it after enablement would need a
+  version and a migration path (lenses: **reversibility**, **trust boundaries**, **boring is a
+  feature**). The removal is tracked as MCAA-346 and lands before the enablement gate; until it
+  does, the shipped code still emits the field and this section is the normative target, not a
+  description of `main`.
 - `/v1/context` packs its context string from the projected rows, so the prose blob cannot carry a
   field the `observations` array dropped.
 
@@ -243,13 +252,12 @@ migration path. The conditions below exist because deciding now is free and deci
 
 ## Conditions carried to the enablement gate (MCAA-286)
 
-1. **Re-confirm or drop `sharedOrigin` before shared scope is enabled anywhere.** Default to
-   dropping it unless a named consumer actually needs origin grouping. Adding a field later is
-   additive and costs nothing; removing one after enablement is breaking. It is also the only
-   remaining correlation channel on a projected row: it lets a reader observe that forty runbooks
-   came from the same publisher without learning who that publisher is. That is the intended
-   tradeoff, but it should be re-confirmed against a real consumer rather than a hypothetical one,
-   while doing so is still free.
+1. ~~**Re-confirm or drop `sharedOrigin` before shared scope is enabled anywhere.**~~ **Resolved
+   2026-09-28: dropped.** No consumer reads the field, so there was nothing to re-confirm it
+   against, and it was the last correlation channel on a projected row. Rationale is in the
+   shared-row shape section above; the removal is MCAA-346, gated to land before enablement. The
+   normative shared view is now six fields: `id`, `kind`, `content`, `shared`, `createdAtEpoch`,
+   `updatedAtEpoch`.
 2. **Admitting any key to `SHARED_METADATA_ALLOWLIST` is a trust-boundary change.** It requires an
    amendment to this ADR naming the key and why it is publishable, plus a test asserting that the
    admitted key -- and only that key -- survives the projection.
@@ -285,9 +293,10 @@ migration path. The conditions below exist because deciding now is free and deci
   the response body, on REST search/context or on any of the three MCP tools. A same-team row
   published outside the queried project gets the same projection, and the same row read from its own
   project still returns the owner view, which pins the boundary from both sides.
-- `tests/server/routes/observation-projection.test.ts` -- the projection's own rules: the exact set
-  of keys surviving a shared view, and that the origin token is stable per origin and distinct
-  across origins.
+- `tests/server/routes/observation-projection.test.ts` -- the projection's own rules. It must assert
+  the surviving key set as an **exact set**, not as a list of absences, so a field added to the
+  shared view later cannot pass silently. (PR #8 asserts the set that still includes `sharedOrigin`,
+  plus that token's stability; MCAA-346 reduces both to the six-field set.)
 - `tests/storage/shared-scope-migration.test.ts` -- forward DDL is idempotent and the
   `SHARED_SCOPE_DOWN_SQL` round trip restores the pre-change shape.
 - `tests/shared/remote-mode.test.ts` -- trigger precedence, including that an under-configured
