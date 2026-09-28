@@ -9,8 +9,8 @@
 
 import {
   BuildCorpusRequestSchema,
-  CorpusFilterSchema,
   MAX_QUERY_HISTORY_TURNS,
+  ProjectableCorpusFilterSchema,
   QueryCorpusRequestSchema,
   parseCorpusScope,
   type BuildCorpusRequest,
@@ -116,7 +116,7 @@ export function buildRequestFromToolArgs(args: Record<string, unknown>): BuildCo
   // An unrecognised scope narrows to 'project' on the MCP path, matching
   // parseScope() in the recall server. It can never widen a read.
   filterInput.scope = parseCorpusScope(args.scope);
-  const filter = CorpusFilterSchema.safeParse(filterInput);
+  const filter = ProjectableCorpusFilterSchema.safeParse(filterInput);
   if (!filter.success) {
     throw new Error(`Invalid corpus filter: ${filter.error.issues.map(issue => issue.message).join('; ')}`);
   }

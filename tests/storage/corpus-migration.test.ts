@@ -161,6 +161,132 @@ describe('MCAA-260 — corpus tables migration round trip', () => {
     expect(await tableExists('corpora')).toBe(false);
   });
 
+  // Condition 23. The build gate only refuses new selections; a corpus
+  // materialized before it keeps its foreign members at rest and keeps answering
+  // the same question through observationCount.
+  describe('the pre-gate purge', () => {
+    async function pregateCorpus(filter: Record<string, unknown>, memberScope: 'project' | 'shared') {
+      const team = await storage.teams.create({ name: `purge-team-${crypto.randomUUID()}` });
+      const project = await storage.projects.create({ teamId: team.id, name: 'purge-project' });
+      await storage.observations.create({
+        projectId: project.id,
+        teamId: team.id,
+        content: 'a shared observation selected by a hidden predicate',
+        metadata: { incidentId: 'INC-4471' },
+        shared: true,
+      });
+      const { corpus } = await storage.corpora.upsert({
+        projectId: project.id,
+        teamId: team.id,
+        name: 'pregate',
+        description: '',
+        filter: {},
+        filterDigest: 'sha256:test',
+        memberScope,
+        shared: false,
+      });
+      await storage.corpora.replaceMembers({
+        corpusId: corpus.id,
+        projectId: project.id,
+        teamId: team.id,
+        filter: {},
+        breadth: 'project',
+        shared: false,
+        limit: 100,
+      });
+      await storage.corpora.upsertArtifact({
+        corpusId: corpus.id,
+        contentDigest: 'sha256:pregate',
+        systemPrompt: 'rendered from a member set the gate now refuses',
+        rendered: 'a shared observation selected by a hidden predicate',
+        tokenEstimate: 42,
+      });
+      await storage.corpora.setStats(corpus.id, { observationCount: 1, matchedCount: 1 });
+      // Written directly: the gate refuses this filter through every code path
+      // that could store it, which is exactly why only an old row can carry it.
+      await client.query('UPDATE corpora SET filter = $2::jsonb WHERE id = $1', [
+        corpus.id,
+        JSON.stringify(filter),
+      ]);
+      return corpus.id;
+    }
+
+    async function countsFor(corpusId: string) {
+      const row = await client.query(
+        `SELECT
+           (SELECT count(*)::int FROM corpus_members WHERE corpus_id = c.id) AS members,
+           (SELECT count(*)::int FROM corpus_artifacts WHERE corpus_id = c.id) AS artifacts,
+           c.stats::text AS stats,
+           c.built_at IS NULL AS unbuilt
+         FROM corpora c WHERE c.id = $1`,
+        [corpusId],
+      );
+      return row.rows[0] as { members: number; artifacts: number; stats: string; unbuilt: boolean };
+    }
+
+    it('clears membership, cached renders and the counts they answer through', async () => {
+      const corpusId = await pregateCorpus(
+        { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+        'shared',
+      );
+      expect((await countsFor(corpusId)).members).toBe(1);
+
+      await bootstrapServerPostgresSchema(client);
+
+      const after = await countsFor(corpusId);
+      expect(after.members).toBe(0);
+      expect(after.artifacts).toBe(0);
+      expect(JSON.parse(after.stats)).toEqual({});
+      expect(after.unbuilt).toBe(true);
+    });
+
+    it('purges a platformSource selection for the same reason', async () => {
+      const corpusId = await pregateCorpus({ scope: 'shared', platformSource: 'cursor' }, 'shared');
+      await bootstrapServerPostgresSchema(client);
+      expect((await countsFor(corpusId)).members).toBe(0);
+    });
+
+    // The corpus row survives so the operator still sees it and gets the
+    // explaining 400 on rebuild, rather than a corpus that silently vanished.
+    it('keeps the corpus row and its filter so the rebuild can explain itself', async () => {
+      const corpusId = await pregateCorpus(
+        { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+        'shared',
+      );
+      await bootstrapServerPostgresSchema(client);
+      const row = await client.query('SELECT name, filter FROM corpora WHERE id = $1', [corpusId]);
+      expect(row.rows[0].name).toBe('pregate');
+      expect(row.rows[0].filter).toEqual({ scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } });
+    });
+
+    // The predicate has to match ownerOnlyFilterFields exactly, or the purge
+    // deletes a corpus the gate would have accepted.
+    it.each([
+      ['a project-scope corpus filtering on metadata', { scope: 'project', metadataMatch: { incidentId: 'INC-4471' } }, 'project' as const],
+      ['a shared-scope corpus with an empty metadataMatch', { scope: 'shared', metadataMatch: {} }, 'shared' as const],
+      ['a shared-scope corpus with a null platformSource', { scope: 'shared', platformSource: null }, 'shared' as const],
+      ['a shared-scope corpus filtering only on projected fields', { scope: 'shared', kinds: ['decision'], query: 'rollback' }, 'shared' as const],
+    ])('leaves %s alone', async (_label, filter, memberScope) => {
+      const corpusId = await pregateCorpus(filter, memberScope);
+      await bootstrapServerPostgresSchema(client);
+      const after = await countsFor(corpusId);
+      expect(after.members).toBe(1);
+      expect(after.artifacts).toBe(1);
+    });
+
+    it('is idempotent when the bootstrap runs again after purging', async () => {
+      const corpusId = await pregateCorpus(
+        { scope: 'shared', metadataMatch: { incidentId: 'INC-4471' } },
+        'shared',
+      );
+      await bootstrapServerPostgresSchema(client);
+      await bootstrapServerPostgresSchema(client);
+      const after = await countsFor(corpusId);
+      expect(after.members).toBe(0);
+      expect(after.artifacts).toBe(0);
+    });
+  });
+
   it('cascades a deleted observation out of every corpus it was a member of', async () => {
     const team = await storage.teams.create({ name: 'cascade-team' });
     const project = await storage.projects.create({ teamId: team.id, name: 'cascade-project' });
