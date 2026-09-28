@@ -10,4 +10,5 @@ supersedes the old one; do not rewrite history in place.
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| [0001](./0001-remote-corpus-api-and-mcp-contract.md) | Remote corpus (knowledge-base) API and MCP contract | Accepted (rev 4, second reviews applied) |
+| [0001](./0001-remote-client-mode-and-shared-scope.md) | Remote client mode, tenant binding and opt-in shared scope | Accepted (arrives with PR #6; link is dead until it merges) |
+| [0002](./0002-remote-corpus-api-and-mcp-contract.md) | Remote corpus (knowledge-base) API and MCP contract | Accepted (rev 5, second reviews applied) |
