@@ -409,7 +409,7 @@ describe('Telegram wrap-up notifier', () => {
     const { sessionDbId, memorySessionId } = createSession('project-a', 'content-retry');
     storeSummary(memorySessionId, 'project-a');
     let failPost = true;
-    const fetchMock = mockFetch((_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchMock = mockFetch((_url, _init) => {
       const response = failPost
         ? new Response('', { status: 500, statusText: 'Server Error' })
         : new Response('', { status: 200 });

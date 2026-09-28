@@ -54,7 +54,7 @@ describe('export-memories script', () => {
     let batchBody: unknown;
     let searchSignal: unknown;
     let batchSignal: unknown;
-    const fetchMock = mockFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = mockFetch(async (input, init) => {
       const url = String(input);
       if (url.startsWith('http://127.0.0.1:45678/api/search?')) {
         searchSignal = init?.signal;
@@ -171,7 +171,7 @@ describe('export-memories script', () => {
       spyOn(console, 'error').mockImplementation(() => {}),
     );
 
-    const fetchMock = mockFetch(async (input: RequestInfo | URL) => {
+    const fetchMock = mockFetch(async (input) => {
       const url = String(input);
       if (url.startsWith('http://127.0.0.1:45678/api/search?')) {
         return new Response(JSON.stringify({

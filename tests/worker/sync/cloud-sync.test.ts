@@ -25,6 +25,7 @@ import {
   type CloudSyncOptions,
 } from '../../../src/services/sync/CloudSync.js';
 import { buildContentOperation, buildMutationOperation, stableDocumentId } from '../../../src/services/sync/CanonicalContent.js';
+import { mockFetch } from '../../helpers/fetch-mock';
 
 const ISO = '2026-07-09T00:00:00.000Z';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -78,7 +79,7 @@ function canonicalAck(op: { body: string; operation_sha256: string }, seq: numbe
 function canonicalSuccess(
   acked: unknown[],
   headSeq: number | string,
-  headers?: HeadersInit,
+  headers?: Record<string, string>,
   projectedSeq: number | string = headSeq,
 ): Response {
   return new Response(JSON.stringify({
@@ -97,7 +98,7 @@ function canonicalSuccess(
 function makeFetchMock(handler?: (call: number) => Response | Error | undefined) {
   const calls: RecordedRequest[] = [];
   let seq = 0;
-  const impl = (async (input: any, init?: any) => {
+  const impl = mockFetch(async (input: any, init?: any) => {
     const body = String(init?.body ?? '');
     const wireParsed = body ? JSON.parse(body) : null;
     const parsed = wireParsed ? { ops: (wireParsed.ops ?? []).map(legacyOpView) } : null;
@@ -129,7 +130,7 @@ function makeFetchMock(handler?: (call: number) => Response | Error | undefined)
       head_seq: String(seq),
       projected_seq: String(seq),
     }), { status: 200 });
-  }) as typeof fetch;
+  });
   return { impl, calls };
 }
 
@@ -618,7 +619,7 @@ describe('CloudSync', () => {
 
   it('aborts a hung content push at the configured requestTimeoutMs', async () => {
     seedObservation({ title: 'hung-push' });
-    const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const impl = mockFetch(async (_input, init) => {
       const signal = init?.signal;
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 80);
@@ -628,7 +629,7 @@ describe('CloudSync', () => {
         });
       });
       return canonicalSuccess([], 0);
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl, {}, { requestTimeoutMs: 20 });
     await sync.flush();
     expect(sync.status().lastError).toMatch(/aborted|timed out|timeout|TimeoutError/i);
@@ -637,7 +638,7 @@ describe('CloudSync', () => {
 
   it('authenticates a read-only Hub status probe even when the local queue is empty', async () => {
     const calls: Array<{ url: string; method: string; headers: Headers; body: unknown; hasSignal: boolean }> = [];
-    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const impl = mockFetch(async (input, init) => {
       calls.push({
         url: String(input),
         method: init?.method ?? 'GET',
@@ -653,7 +654,7 @@ describe('CloudSync', () => {
         op_count: 7,
         device_count: 2,
       });
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl);
 
     // An empty drain performs no write request and therefore proves nothing
@@ -695,10 +696,10 @@ describe('CloudSync', () => {
       },
     ];
     for (const scenario of scenarios) {
-      const impl = (async () => {
+      const impl = mockFetch(async () => {
         if (scenario.response instanceof Error) throw scenario.response;
         return scenario.response.clone();
-      }) as typeof fetch;
+      });
       const sync = makeCloudSync(impl);
       const status = await sync.statusWithHubProbe();
       expect(status.hub).toMatchObject({
@@ -827,7 +828,7 @@ describe('CloudSync', () => {
     const calls: RecordedRequest[] = [];
     let seq = 0;
     let failNext = false;
-    const impl = (async (input: any, init?: any) => {
+    const impl = mockFetch(async (input: any, init?: any) => {
       const body = String(init?.body ?? '');
       const wireParsed = JSON.parse(body);
       calls.push({
@@ -840,7 +841,7 @@ describe('CloudSync', () => {
       }
       const acked = wireParsed.ops.map((op: any) => canonicalAck(op, ++seq));
       return canonicalSuccess(acked, seq);
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl, {}, { backoffInitialMs: 60_000, backoffMaxMs: 60_000 });
 
     const assertNextRetryExact = async (): Promise<any> => {
@@ -877,12 +878,12 @@ describe('CloudSync', () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const sent: any[] = [];
     let seq = 0;
-    const impl = (async (_input: any, init?: any) => {
+    const impl = mockFetch(async (_input: any, init?: any) => {
       const parsed = JSON.parse(String(init?.body));
       sent.push(parsed);
       if (sent.length === 1) await gate;
       return canonicalSuccess(parsed.ops.map((op: any) => canonicalAck(op, ++seq)), seq);
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl);
     const flushing = sync.flush();
     for (let i = 0; i < 100 && sent.length === 0; i++) await sleep(2);
@@ -913,13 +914,13 @@ describe('CloudSync', () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const sent: any[] = [];
     let seq = 0;
-    const impl = (async (_input: any, init?: any) => {
+    const impl = mockFetch(async (_input: any, init?: any) => {
       const parsed = JSON.parse(String(init?.body));
       sent.push(parsed);
       if (sent.length === 1) await gate;
       const acked = parsed.ops.map((op: any) => canonicalAck(op, ++seq));
       return canonicalSuccess(acked, seq);
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl, {}, { backoffInitialMs: 60_000 });
     const flushing = sync.flush();
     for (let i = 0; i < 100 && sent.length === 0; i++) await sleep(2);
@@ -1393,12 +1394,12 @@ describe('CloudSync', () => {
         seedFrozenAckState();
         const before = ackDurabilityState();
         const calls: any[] = [];
-        const impl = (async (_input: any, init?: any) => {
+        const impl = mockFetch(async (_input: any, init?: any) => {
           const parsed = JSON.parse(String(init?.body));
           calls.push(parsed);
           const acked = parsed.ops.map((op: any, index: number) => canonicalAck(op, index + 1));
           return canonicalSuccess(scenario.mutate(acked, parsed.ops), 3);
-        }) as typeof fetch;
+        });
 
         const sync = makeCloudSync(impl, {}, { backoffInitialMs: 600_000 });
         const seenHeads: string[] = [];
@@ -1456,12 +1457,12 @@ describe('CloudSync', () => {
       it(`rejects a 200 with ${scenario.name} before any acknowledgment state changes`, async () => {
         seedFrozenAckState();
         const before = ackDurabilityState();
-        const impl = (async (_input: any, init?: any) => {
+        const impl = mockFetch(async (_input: any, init?: any) => {
           const parsed = JSON.parse(String(init?.body));
           const base = parsed.ops.map((op: any, index: number) => canonicalAck(op, index + 1));
           const changed = scenario.change(base);
           return canonicalSuccess(changed.acks, changed.head, undefined, changed.projected);
-        }) as typeof fetch;
+        });
 
         const sync = makeCloudSync(impl, {}, { backoffInitialMs: 600_000 });
         const seenHeads: string[] = [];
@@ -1478,12 +1479,12 @@ describe('CloudSync', () => {
     it('preserves a mutation outbox entry when its own 200 ack has a wrong hash', async () => {
       store.createSDKSession('bad-mutation-ack', 'proj-x', 'prompt', 'title', 'claude');
       let atResponse: unknown;
-      const impl = (async (_input: any, init?: any) => {
+      const impl = mockFetch(async (_input: any, init?: any) => {
         const parsed = JSON.parse(String(init?.body));
         atResponse = ackDurabilityState();
         const ack = canonicalAck(parsed.ops[0], 1);
         return canonicalSuccess([{ ...ack, operation_sha256: 'A'.repeat(43) }], 1);
-      }) as typeof fetch;
+      });
       const sync = makeCloudSync(impl, {}, { backoffInitialMs: 600_000 });
       const seenHeads: string[] = [];
       sync.setHeadSeqListener(head => seenHeads.push(head));
@@ -1499,11 +1500,11 @@ describe('CloudSync', () => {
 
     it('accepts a 200 whose durable head is ahead of projected when every ack is covered', async () => {
       seedFrozenAckState();
-      const impl = (async (_input: any, init?: any) => {
+      const impl = mockFetch(async (_input: any, init?: any) => {
         const parsed = JSON.parse(String(init?.body));
         const acks = parsed.ops.map((op: any, index: number) => canonicalAck(op, index + 1));
         return canonicalSuccess(acks, '3', undefined, '2');
-      }) as typeof fetch;
+      });
       const sync = makeCloudSync(impl);
       await sync.flush();
       expect(sync.status().lastError).toBeNull();
@@ -1512,7 +1513,7 @@ describe('CloudSync', () => {
     });
 
     it('accepts an empty-ack push when head is ahead of projected', async () => {
-      const impl = (async () => canonicalSuccess([], '9', undefined, '3')) as typeof fetch;
+      const impl = mockFetch(async () => canonicalSuccess([], '9', undefined, '3'));
       const sync = makeCloudSync(impl);
       const validate = (sync as unknown as {
         validatePushResponse: (response: any, pushed: any[]) => void;
@@ -1545,11 +1546,11 @@ describe('CloudSync', () => {
       seedObservation({ title: 'c' });
 
       let seq = 0;
-      const impl = (async (_input: any, init?: any) => {
+      const impl = mockFetch(async (_input: any, init?: any) => {
         const parsed = JSON.parse(String(init?.body));
         const acked = (parsed.ops as any[]).map((op) => canonicalAck(op, ++seq)).reverse();
         return canonicalSuccess(acked, seq);
-      }) as typeof fetch;
+      });
 
       const sync = makeCloudSync(impl);
       await sync.flush();
@@ -1582,13 +1583,13 @@ describe('CloudSync', () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const bodies: any[] = [];
     let seq = 0;
-    const impl = (async (_input: any, init?: any) => {
+    const impl = mockFetch(async (_input: any, init?: any) => {
       const parsed = JSON.parse(String(init?.body));
       bodies.push(parsed);
       if (bodies.length === 1) await gate;
       const acked = (parsed.ops as any[]).map((op) => canonicalAck(op, ++seq));
       return canonicalSuccess(acked, seq);
-    }) as typeof fetch;
+    });
 
     const sync = makeCloudSync(impl);
     const flushPromise = sync.flush();
@@ -1693,7 +1694,7 @@ describe('CloudSync', () => {
   it('honors Retry-After on 429 before the next push', async () => {
     seedObservation();
     let call = 0;
-    const impl = (async () => {
+    const impl = mockFetch(async () => {
       call += 1;
       if (call === 1) {
         return new Response('rate limited', {
@@ -1702,7 +1703,7 @@ describe('CloudSync', () => {
         });
       }
       return new Response(JSON.stringify({ acked: [], head_seq: '0', projected_seq: '0' }), { status: 200 });
-    }) as typeof fetch;
+    });
     const sync = makeCloudSync(impl, {}, { backoffInitialMs: 20, debounceMs: 10 });
     await sync.flush();
     expect(call).toBe(1);
@@ -1721,11 +1722,11 @@ describe('CloudSync', () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const calls: string[] = [];
-    const impl = (async (input: any) => {
+    const impl = mockFetch(async (input: any) => {
       calls.push(String(input));
       await gate;
       return new Response(JSON.stringify({ acked: [], head_seq: 0 }), { status: 200 });
-    }) as typeof fetch;
+    });
 
     const sync = makeCloudSync(impl, {}, { backoffInitialMs: 20 });
 
@@ -1807,13 +1808,13 @@ describe('CloudSync', () => {
     /** Hub that acks properly AND stamps X-Sync-Mode when `mode` is set. */
     function makeModeFetch(mode: string | null) {
       let seq = 0;
-      const impl = (async (_input: any, init?: any) => {
+      const impl = mockFetch(async (_input: any, init?: any) => {
         const parsed = JSON.parse(String(init?.body ?? '{}'));
         const acked = (parsed.ops ?? []).map((op: any) => canonicalAck(op, ++seq));
         const headers: Record<string, string> = {};
         if (mode !== null) headers['X-Sync-Mode'] = mode;
         return canonicalSuccess(acked, seq, headers);
-      }) as typeof fetch;
+      });
       return impl;
     }
 
@@ -1858,11 +1859,11 @@ describe('CloudSync', () => {
 
     /** Hub that only ever errors, with or without the mode header. */
     function makeErrorFetch(mode: string | null, status = 503) {
-      const impl = (async () => {
+      const impl = mockFetch(async () => {
         const headers: Record<string, string> = {};
         if (mode !== null) headers['X-Sync-Mode'] = mode;
         return new Response('hub down', { status, headers });
-      }) as typeof fetch;
+      });
       return impl;
     }
 
