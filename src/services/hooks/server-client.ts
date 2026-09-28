@@ -178,10 +178,18 @@ export interface ServerSearchObservationsRequest {
   scope?: ServerReadScope;
 }
 
+// MCAA-281 — `projectId` is absent on a row reached through `scope: "shared"`
+// that the caller does not own: the server projects those down to the published
+// content plus `sharedOrigin`, an opaque grouping token. Declaring it required
+// would hand callers an `undefined` the compiler promised could not happen.
+export interface ServerSharedProjectedFields {
+  projectId?: string;
+  sharedOrigin?: string;
+}
+
 export interface ServerSearchObservationsResponse {
-  observations: Array<{
+  observations: Array<ServerSharedProjectedFields & {
     id: string;
-    projectId: string;
     content: string;
     [key: string]: unknown;
   }>;
@@ -198,9 +206,8 @@ export interface ServerContextObservationsRequest {
 }
 
 export interface ServerContextObservationsResponse {
-  observations: Array<{
+  observations: Array<ServerSharedProjectedFields & {
     id: string;
-    projectId: string;
     content: string;
     [key: string]: unknown;
   }>;
