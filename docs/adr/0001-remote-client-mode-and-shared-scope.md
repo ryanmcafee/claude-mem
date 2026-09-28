@@ -443,13 +443,21 @@ migration path. The conditions below exist because deciding now is free and deci
   `keeps a per-event generated observation private despite shared-looking input` and
   `keeps a session-summary generated observation private despite shared-looking input`. Each asserts
   the persisted row, the returned object and the `observation.created` audit entry.
-  The file's other thirteen tests are unrelated to this decision, and PR #11/#12 rewrite that file's
+  The file's other tests are unrelated to this decision, and PR #11/#12 rewrite that file's
   whole harness (`pool.on('connect')` -> `createIsolatedSchema`/`poolForSchema`). Resolving that
   conflict by taking either side wholesale compiles, passes, and deletes these two: the workflow
   still names the file, so the gate stays green while the property stops being tested. **A merge
   resolution that does not leave both names in the file is a regression of this decision regardless
-  of CI colour.** Verified 2026-09-28: fifteen `it(` on PR #8's branch, thirteen on `main`,
-  PR #11 and PR #12 -- the delta is exactly these two.
+  of CI colour.**
+
+  The acceptance is the two titles, never a test count. A count is
+  instrument-dependent and this one already disagreed with itself: the file opens with
+  `it.skip('requires CLAUDE_MEM_TEST_POSTGRES_URL for Postgres integration')`, which a
+  `^\s*it\(` grep cannot see. That grep reports 15 titles on PR #8's branch and 13 on `main`,
+  PR #11 and PR #12; the AST inventory below reports 16 and 14. Both are right about the delta and
+  neither is a usable acceptance criterion, because a reader checking the wrong instrument sees a
+  mismatch that is not one. Verified 2026-09-28 with `scripts/test-names.ts` itself, diffing PR #8's
+  copy against PR #11's: `16 -> 14`, removed titles exactly these two and nothing else.
 - `tests/storage/shared-scope-migration.test.ts` -- forward DDL is idempotent and the
   `SHARED_SCOPE_DOWN_SQL` round trip restores the pre-change shape.
 - `tests/shared/remote-mode.test.ts` -- trigger precedence, including that an under-configured
@@ -461,3 +469,22 @@ migration path. The conditions below exist because deciding now is free and deci
   `process-generated-response.test.ts` was gated on `CLAUDE_MEM_TEST_POSTGRES_URL` that no job
   supplied, so it reported green for months without ever executing. A gate whose failure mode is
   silence is not a gate.
+- `dropped-test guard (gated suites)` (PR #18, MCAA-395) enforces the paragraph above by machine
+  rather than by review. It extracts test titles with the TypeScript compiler, compares each changed
+  gated suite against the merge base as a per-title multiset, and fails the build on a title present
+  at base and absent at head. So "a regression of this decision regardless of CI colour" is now a
+  regression CI colour reports. Two properties make it hold for this decision specifically: it scopes
+  a file in by the **union** of the gate markers found in the base and head sources, so a resolution
+  cannot escape the check by also deleting the `CLAUDE_MEM_TEST_POSTGRES_URL` guard; and it compares
+  multiplicities rather than a set, so one of two same-titled tests disappearing still fails.
+
+  Stated limits, so nobody reads the guard as wider than it is. `it.each`/`test.each` titles are
+  computed at runtime and invisible to a source scan, so the inventory is a floor. A rename reads as
+  a removal plus an addition and fires; the escape hatch is a `Removed-test: "<exact title>" <why>`
+  commit trailer or the `tests-removed` PR label, deliberately requiring a stated reason, because a
+  gate people learn to click past is worse than no gate. And it catches a deleted assertion, not a
+  relocated one: a guard re-applied to the wrong function removes no title and stays green
+  (MCAA-394). This guard and the `docs/adr/README.md` conventions are the same rule at two
+  altitudes -- the record
+  says which assertions the decision owns, the guard refuses to let one disappear -- and neither
+  substitutes for the other.

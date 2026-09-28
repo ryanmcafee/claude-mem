@@ -16,6 +16,12 @@ Conventions:
   not only the file, when the same file also carries tests this decision does not own: a merge or a
   harness rewrite can delete an assertion while the file keeps passing and the workflow keeps
   naming it, and a list of filenames cannot tell you that happened.
+- Name the titles, never a test count. A count is a property of the instrument that produced it, not
+  of the file: a `^\s*it\(` grep and an AST walk disagree on the same revision because the grep
+  cannot see `it.skip(...)` or a currying `it.each(...)`. A record that fixes a number sends its next
+  reader to verify a figure their tool reports differently, which reads as a discrepancy and is not
+  one. Titles are what the `dropped-test guard (gated suites)` job compares, so they are also what
+  the machine will hold you to.
 
 | ADR | Title | Status |
 | --- | --- | --- |
