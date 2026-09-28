@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'bun:test';
-import { spawn, type ChildProcess } from 'child_process';
+import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { killProcessTree, collectDescendantIdentities } from '../../src/shared/kill-process-tree.js';
 import { captureProcessStartToken } from '../../src/shared/process-identity.js';
 import { isPidAlive } from '../../src/supervisor/process-registry.js';
@@ -9,14 +9,16 @@ import { isPidAlive } from '../../src/supervisor/process-registry.js';
  *
  * Most of the reuse suite is `describe.if(isPosix)` — its fixtures depend on
  * `/bin/sh`, `pgrep` and SIGTERM semantics that have no Windows equivalent —
- * so it runs on ubuntu only. That left three Windows-specific mechanisms with
+ * so it runs on ubuntu only. That left four Windows-specific mechanisms with
  * no executing coverage anywhere, and they are exactly the ones that cannot be
  * verified locally:
  *
  *   1. the CIM process-table read (descendant discovery),
  *   2. taskkill exit-code classification (not-found tolerated, real failures
  *      surfaced),
- *   3. the root identity gate short-circuiting before `taskkill /T /F`.
+ *   3. the root identity gate short-circuiting before `taskkill /T /F`,
+ *   4. the descendant reap that runs after `/T` — including on the not-found
+ *      branch, where the children are the ones that outlived the root.
  *
  * A format or behaviour difference in any of those would silently skip every
  * descendant as "reused" and bring back #2313 while the code still looked
@@ -83,6 +85,35 @@ describe('killProcessTree end-to-end on this platform', () => {
     await killProcessTree(root.pid!);
 
     expect(await waitUntil(() => !isPidAlive(root.pid!), 20_000)).toBe(true);
+    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
+  }, 60_000);
+
+  /**
+   * Windows-only because the condition is only OBSERVABLE there: Win32_Process
+   * keeps a dead parent's ParentProcessId, so an orphan is still discoverable
+   * from the root PID. On POSIX the same orphan re-parents to init and drops
+   * out of the walk, so no assertion could distinguish reap from short-circuit.
+   *
+   * The regression: taskkill answers 128 / "no running instance" for a root
+   * that is already gone, and that branch used to return success WITHOUT ever
+   * enumerating descendants — precisely the case where children outlived the
+   * root and may still hold the worker port.
+   */
+  it.if(isWindows)('reaps a descendant when the root is already gone at call time', async () => {
+    const root = spawnTwoLevelTree();
+    await settle();
+
+    const descendants = await collectDescendantIdentities(root.pid!);
+    expect(descendants.length).toBeGreaterThan(0);
+    const childPid = descendants[0]!.pid;
+
+    // No /T: kill ONLY the root, leaving the descendant orphaned and alive.
+    execFileSync('taskkill', ['/PID', String(root.pid!), '/F'], { windowsHide: true, stdio: 'ignore' });
+    expect(await waitUntil(() => !isPidAlive(root.pid!), 20_000)).toBe(true);
+    expect(isPidAlive(childPid)).toBe(true);
+
+    await killProcessTree(root.pid!);
+
     expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
   }, 60_000);
 

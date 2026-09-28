@@ -105,7 +105,9 @@ export interface KillProcessTreeOptions {
  * then SIGKILL of the union of the pre- and post-settle descendant sets; in
  * 'immediate' mode it is SIGKILL throughout.
  *
- * Windows: `taskkill /T /F /PID` for full subtree teardown.
+ * Windows: snapshots the descendant set, runs `taskkill /T /F /PID`, then
+ * terminates the union of that snapshot and anything still reachable — because
+ * `/T` alone silently misses descendants whose root exits during its walk.
  *
  * Throws ProcessTreeKillError when the kill genuinely failed (the tree may
  * still be alive). A target that was already gone is NOT an error.
@@ -136,31 +138,86 @@ export async function killProcessTree(
   logger.debug('PROCESS', `Killing process tree rooted at PID ${pid}`, { immediate });
 
   if (process.platform === 'win32') {
-    try {
-      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        timeout: 5_000,
-        windowsHide: true
-      });
-    } catch (error) {
-      const code = (error as { code?: number | string }).code;
-      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
-      const message = error instanceof Error ? error.message : String(error);
+    // Snapshot BEFORE taskkill, while the root is still known intact.
+    //
+    // `/T` resolves the subtree from the live process table at invocation
+    // time, so a root that exits before or during that walk takes its
+    // descendants off the kill list entirely — the orphan condition #2313
+    // exists to prevent, and what the cross-platform suite observed on
+    // windows-2022: the root died, its `ping` descendant outlived the call by
+    // 20s. The POSIX branch below reaps a pre-signal snapshot for the same
+    // reason; this makes Windows structurally match it.
+    const descendantsBeforeKill = await collectDescendantIdentities(pid);
 
-      // Already gone is the expected, tolerated case.
-      if (code === TASKKILL_NOT_FOUND_EXIT || TASKKILL_NOT_FOUND_PATTERN.test(`${stderr} ${message}`)) {
-        logger.debug('PROCESS', 'taskkill reported the process was already gone', { pid });
-        return;
+    /** Deferred so a genuine taskkill failure still reaps the snapshot first. */
+    let taskkillFailure: ProcessTreeKillError | null = null;
+
+    // Enumeration above is an await, so the root may have exited and had its
+    // PID reissued while it ran. Never `/T` a reused root: that subtree
+    // belongs to the replacement. Its real descendants stay valid targets.
+    if (rootIsIntact()) {
+      try {
+        await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+          timeout: 5_000,
+          windowsHide: true
+        });
+      } catch (error) {
+        const code = (error as { code?: number | string }).code;
+        const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (code === TASKKILL_NOT_FOUND_EXIT || TASKKILL_NOT_FOUND_PATTERN.test(`${stderr} ${message}`)) {
+          // Already gone is tolerated, but it is also the case MOST likely to
+          // have left orphans — the children outlived the root — so it falls
+          // through to the reap below instead of returning success here.
+          logger.debug('PROCESS', 'taskkill reported the process was already gone', { pid });
+        } else {
+          // Anything else — access denied, a timeout, a wedged /T walk — means
+          // the tree may still be running. Surfacing it is the whole point:
+          // callers like `server stop` must not report success over a failed
+          // kill. Thrown after the reap, so a partial failure still cleans up.
+          taskkillFailure = new ProcessTreeKillError(
+            pid,
+            `taskkill failed for PID ${pid} (exit ${String(code)}): ${stderr.trim() || message}`,
+            { cause: error }
+          );
+        }
       }
-
-      // Anything else — access denied, a timeout, a wedged /T walk — means the
-      // tree may still be running. Surfacing it is the whole point: callers
-      // like `server stop` must not report success over a failed kill.
-      throw new ProcessTreeKillError(
-        pid,
-        `taskkill failed for PID ${pid} (exit ${String(code)}): ${stderr.trim() || message}`,
-        { cause: error }
-      );
+    } else {
+      logger.warn('PROCESS', 'Skipping taskkill: root PID was reused during descendant enumeration', { pid });
     }
+
+    // Reap the UNION of the pre-taskkill snapshot and whatever is still
+    // reachable now, deduped with the fresher token winning on collision.
+    // Windows keeps a dead parent's ParentProcessId, so the second read can
+    // still surface survivors; a REUSED root is skipped because those children
+    // are the replacement's.
+    const descendantsAfterKill = rootIsIntact() ? await collectDescendantIdentities(pid) : [];
+    const killTargets = new Map<number, string | null>();
+    for (const child of descendantsBeforeKill) killTargets.set(child.pid, child.startToken);
+    for (const child of descendantsAfterKill) killTargets.set(child.pid, child.startToken);
+
+    for (const [childPid, startToken] of killTargets) {
+      // Same reuse guard POSIX applies: a snapshot member absent from the
+      // second read either survived a re-parent (reap it) or exited and had
+      // its number reissued (leave the stranger alone). Only the token
+      // separates those two.
+      if (!isSameProcess(childPid, startToken)) {
+        logger.debug('PROCESS', 'Skipping terminate: descendant PID was reused since the scan', {
+          pid: childPid,
+          rootPid: pid,
+        });
+        continue;
+      }
+      try {
+        // Windows has no signals: this is TerminateProcess on that one PID.
+        process.kill(childPid, 'SIGKILL');
+      } catch {
+        // Already gone — fine.
+      }
+    }
+
+    if (taskkillFailure) throw taskkillFailure;
     return;
   }
 
@@ -451,9 +508,10 @@ async function readProcessTableWindows(): Promise<ProcessTableRow[]> {
  * in the same table read that discovered it. Bottom-up (leaves first) so
  * callers can signal leaves before their ancestors.
  *
- * Works on Windows as well as POSIX. That is load-bearing, not a nicety: the
- * chroma teardown snapshots descendants BEFORE closing the transport, because
- * once the root exits its children re-parent and become unreachable from it.
+ * Works on Windows as well as POSIX, and both teardown paths depend on it:
+ * killProcessTree snapshots descendants before signalling the root, and the
+ * chroma teardown snapshots them before closing the transport, because once
+ * the root exits its children re-parent and become unreachable from it.
  *
  * Returns [] both when the tree genuinely has no descendants and when the
  * table could not be read; the latter logs a warning first, because it
