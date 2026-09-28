@@ -1,67 +1,58 @@
+# syntax=docker/dockerfile:1
+# Builder and runtime use the same supported Alpine release/libc on each platform.
+FROM oven/bun:1.3.12-alpine@sha256:26d8996560ca94eab9ce48afc0c7443825553c9a851f40ae574d47d20906826d AS bun
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS base
+RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cdn.alpinelinux.org/alpine/v3.24/community > /etc/apk/repositories \
+ && apk upgrade --no-cache \
+ && apk add --no-cache nodejs ca-certificates curl git bash coreutils libgcc libstdc++ ripgrep \
+ && addgroup -g 1000 node && adduser -D -u 1000 -G node node
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+ENV USE_BUILTIN_RIPGREP=0
+FROM base AS dependencies
+# Build the exact npm CLI versions against musl; upstream Linux downloads use
+# glibc and require symbols (including __res_init) that gcompat cannot provide.
+# Cargo/toolchains and the SQL generator remain in this builder stage only.
+# clang20-dev supplies the libclang that rquickjs-sys needs to run bindgen.
+RUN apk add --no-cache npm python3 make g++ linux-headers cargo clang20-dev
+RUN for version in 0.23.2 0.24.7 0.26.9; do \
+      cargo install tree-sitter-cli --version "=$version" --locked \
+        --root "/opt/tree-sitter/$version" \
+      && "/opt/tree-sitter/$version/bin/tree-sitter" --version || exit 1; \
+    done
+WORKDIR /opt/claude-mem
+COPY plugin/package.json plugin/bun.lock ./
+# Configure native CLI installers before any dependency lifecycle can download
+# or execute a glibc binary. npm rebuild below runs the dependency lifecycles.
+RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY scripts/container/configure-tree-sitter.cjs /tmp/configure-tree-sitter.cjs
+RUN node /tmp/configure-tree-sitter.cjs /opt/claude-mem/node_modules
+RUN /opt/tree-sitter/0.24.7/bin/tree-sitter --version
+# Rebuild native bindings against musl rather than copying glibc prebuilds.
+# Node 24 headers require C++20; older grammar gyp files default to C++17.
+RUN CXXFLAGS="-std=c++20" npm rebuild --build-from-source
+RUN ./node_modules/.bin/tree-sitter --version
+ARG CLAUDE_CODE_VERSION=2.1.283
+RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
+    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-FROM node:20
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      git \
-      curl \
-      ca-certificates \
-      unzip \
-      jq \
-      less \
-      procps \
-      uuid-runtime \
-      sqlite3 \
- && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ARG BUN_VERSION=1.3.12
-ENV BUN_INSTALL="/usr/local/bun"
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
- && chmod -R a+rX /usr/local/bun
-ENV PATH="/usr/local/bun/bin:${PATH}"
-
-ARG UV_VERSION=0.11.7
-ENV UV_INSTALL_DIR="/usr/local/bin"
-RUN set -eux \
- && curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
- && { chmod a+rX /usr/local/bin/uv /usr/local/bin/uvx 2>/dev/null || true; }
-
-RUN mkdir -p /usr/local/share/npm-global \
- && chown -R node:node /usr/local/share/npm-global
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH="/usr/local/share/npm-global/bin:${PATH}"
-
-ARG CLAUDE_CODE_VERSION=latest
-USER node
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
-
-USER root
+FROM base AS runtime
+COPY --from=dependencies /opt/claude-cli /opt/claude-cli
+RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
 COPY plugin/ /opt/claude-mem/
-RUN chown -R node:node /opt/claude-mem
-
-USER node
-RUN cd /opt/claude-mem \
- && npm install --omit=dev --legacy-peer-deps
-
-USER root
+COPY --from=dependencies /opt/claude-mem/node_modules /opt/claude-mem/node_modules
+COPY --chmod=755 docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
+# Home is intentionally immutable; only these subdirectories need volumes.
 RUN mkdir -p /home/node/.claude /home/node/.claude-mem /data/claude-mem \
- && chown -R node:node /home/node/.claude /home/node/.claude-mem /data/claude-mem
-
-COPY --chown=node:node docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
-RUN chmod +x /usr/local/bin/claude-mem-entrypoint
-
-USER node
+ && chown node:node /home/node/.claude /home/node/.claude-mem /data/claude-mem
+ENV CLAUDE_MEM_CONTAINER_MODE=server \
+    CLAUDE_MEM_RUNTIME=server-beta \
+    CLAUDE_MEM_DATA_DIR=/data/claude-mem \
+    CLAUDE_CONFIG_DIR=/home/node/.claude \
+    XDG_CACHE_HOME=/tmp/.cache \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    DISABLE_AUTOUPDATER=1
+USER 1000:1000
 WORKDIR /home/node
-
-# Phase 10 — server-beta runtime is the only foregrounded process. The legacy
-# worker binaries remain available for tooling but are NEVER spawned by the
-# entrypoint. Mode selection happens via CLAUDE_MEM_CONTAINER_MODE
-# (server | worker | shell). `docker run ... bash` works because shell mode
-# falls through to "$@".
-ENV CLAUDE_MEM_CONTAINER_MODE=server
-ENV CLAUDE_MEM_RUNTIME=server-beta
-
+EXPOSE 37877
 ENTRYPOINT ["/usr/local/bin/claude-mem-entrypoint"]
 CMD []
