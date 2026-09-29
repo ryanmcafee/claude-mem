@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
 import { logger } from '../../src/utils/logger.js';
 import {
   __clearServerJobsTestSeams,
@@ -32,10 +32,10 @@ function buildMockPool(rowsFor: (sql: string, params: unknown[]) => unknown[]): 
 
 describe('Phase 12 — server jobs CLI', () => {
   const originalEnv = { ...process.env };
-  let logSpies: ReturnType<typeof spyOn>[] = [];
-  let consoleLogSpy: ReturnType<typeof spyOn>;
-  let consoleErrSpy: ReturnType<typeof spyOn>;
-  let exitSpy: ReturnType<typeof spyOn>;
+  let logSpies: Mock<(...args: never[]) => unknown>[] = [];
+  let consoleLogSpy: Mock<typeof console.log>;
+  let consoleErrSpy: Mock<typeof console.error>;
+  let exitSpy: Mock<typeof process.exit>;
   let exitCalls: number[] = [];
 
   beforeEach(() => {
@@ -50,7 +50,7 @@ describe('Phase 12 — server jobs CLI', () => {
     exitSpy = spyOn(process, 'exit').mockImplementation((code?: number) => {
       exitCalls.push(code ?? 0);
       throw new Error(`__exit_${code ?? 0}__`);
-    }) as never;
+    });
 
     process.env.CLAUDE_MEM_SERVER_DATABASE_URL = 'postgres://test/test';
     process.env.CLAUDE_MEM_SERVER_ADMIN = '1';
@@ -82,7 +82,7 @@ describe('Phase 12 — server jobs CLI', () => {
       return [];
     });
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: mockData.pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: mockData.pool, releasePool: async () => {} }),
       collectBullmqCounts: async () => { throw new Error('bullmq unavailable'); },
     });
     await runServerJobsCommand(['status', '--team', 'team-1']);
@@ -100,7 +100,7 @@ describe('Phase 12 — server jobs CLI', () => {
       return [];
     });
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: mockData.pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: mockData.pool, releasePool: async () => {} }),
       collectBullmqCounts: async () => ({
         event: { waiting: 1, active: 0, completed: 0, failed: 0, delayed: 0, stalled: 0 },
         summary: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, stalled: 0 },
@@ -131,7 +131,7 @@ describe('Phase 12 — server jobs CLI', () => {
       return [];
     });
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: mockData.pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: mockData.pool, releasePool: async () => {} }),
       collectBullmqCounts: async () => { throw new Error('not configured'); },
     });
     await runServerJobsCommand(['failed', '--team', 'team-1']);
@@ -159,7 +159,7 @@ describe('Phase 12 — server jobs CLI', () => {
     });
     let republishCalled = false;
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: mockData.pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: mockData.pool, releasePool: async () => {} }),
       republishToBullmq: async () => { republishCalled = true; },
     });
     await runServerJobsCommand(['retry', 'gj_1', '--team', 'team-1']);
@@ -200,7 +200,7 @@ describe('Phase 12 — server jobs CLI', () => {
     let republishCalled = false;
     let republishedPayload: Record<string, unknown> = {};
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: pool, releasePool: async () => {} }),
       republishToBullmq: async (_st, _id, payload) => {
         republishCalled = true;
         republishedPayload = payload;
@@ -234,7 +234,7 @@ describe('Phase 12 — server jobs CLI', () => {
       return [];
     });
     __setServerJobsTestSeams({
-      openPool: async () => ({ pool: mockData.pool as never, releasePool: async () => {} }),
+      openPool: async () => ({ pool: mockData.pool, releasePool: async () => {} }),
     });
     await expect(runServerJobsCommand(['cancel', 'gj_done', '--team', 'team-1'])).rejects.toThrow(/__exit_1__/);
     const errMsg = consoleErrSpy.mock.calls.map(c => String(c[0])).join('\n');
