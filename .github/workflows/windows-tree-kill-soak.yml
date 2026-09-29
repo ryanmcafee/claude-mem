@@ -20,6 +20,10 @@ on:
         description: 'Test names (; or newline separated) that must run in EVERY draw. Blank = both MCAA-375 acceptance tests.'
         required: false
         default: ''
+      allow_survivors:
+        description: 'Test names (; or newline separated) allowed to leave a process running. Blank = none, which is the current suite.'
+        required: false
+        default: ''
 
 jobs:
   plan:
@@ -92,8 +96,11 @@ jobs:
       # scrape can mistake "never ran" for "passed". junit.xml names every
       # testcase and marks <skipped /> explicitly.
       - name: Tree-kill suite
+        id: suite
         timeout-minutes: 8
         shell: pwsh
+        env:
+          CLAUDE_MEM_TREE_KILL_PID_LEDGER: tree-kill-pids.jsonl
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
           $suite = 'tests/shared/kill-process-tree-cross-platform.test.ts'
@@ -105,22 +112,34 @@ jobs:
       # A wedged draw is the most informative outcome this soak can produce, so
       # record what is still alive before the runner's orphan sweep reaps it.
       #
-      # This is NOT empty on a healthy draw. Measured across 20 green draws in
-      # run 36434109032, every draw leaves exactly two orphaned `ping -n 120`
-      # trees, both accounted for: `discovers descendants through the production
-      # enumeration` kills only the root, and `is a complete no-op when the root
-      # identity does not match` cleans up `descendants[0]`, which is the
-      # conhost rather than the ping. Read this against a baseline of two.
-      - name: Surviving processes
-        if: always()
+      # This used to be an image-name filter over the whole process table, read
+      # against "a baseline of two orphaned `ping -n 120` trees per green draw"
+      # (20/20 draws of run 36434109032). A baseline read by eye is not a gate,
+      # and image names cannot say WHICH test leaked: all six spawn the same
+      # fixture. The census joins the suite's per-test PID ledger against the
+      # table instead, so every survivor is reported with the test that created
+      # it and the draw goes red unless that test is declared with --allow.
+      #
+      # It fails on an empty ledger too: a census of a suite that never ran
+      # would otherwise report zero survivors and look like a clean draw.
+      #
+      # allow_survivors exists for a soak against a tree where some test still
+      # leaks by design — before MCAA-485, `discovers descendants through the
+      # production enumeration` did. Parsed here rather than interpolated into
+      # the command so a name containing a space or a quote cannot reshape it.
+      - name: Attribute surviving processes
+        if: always() && steps.suite.conclusion != 'skipped'
         shell: pwsh
+        env:
+          ALLOW_SURVIVORS: ${{ inputs.allow_survivors }}
         run: |
-          $survivors = Get-CimInstance Win32_Process |
-            Where-Object { $_.Name -match '^(cmd|PING|conhost|bun)\.exe$' } |
-            Select-Object ProcessId, ParentProcessId, Name, CommandLine
-          if ($survivors) { $survivors | Format-List | Out-String -Width 400 | Set-Content survivors.log }
-          else { Set-Content survivors.log 'no matching survivors' }
-          Get-Content survivors.log
+          $bun = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
+          $allow = @()
+          foreach ($name in ("$env:ALLOW_SURVIVORS" -split '[;\r\n]+')) {
+            if ($name.Trim()) { $allow += @('--allow', $name.Trim()) }
+          }
+          & $bun scripts/tree-kill-survivor-census.ts `
+            --ledger tree-kill-pids.jsonl --out survivors.log --json survivors.json @allow
 
       - name: Upload draw evidence
         if: always()
@@ -131,6 +150,8 @@ jobs:
             draw.log
             junit.xml
             survivors.log
+            survivors.json
+            tree-kill-pids.jsonl
           if-no-files-found: error
 
   verdict:
