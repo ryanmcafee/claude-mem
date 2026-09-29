@@ -8,7 +8,7 @@ const VERSION_CHECK_SCRIPT = join(import.meta.dir, '..', 'plugin', 'scripts', 'v
 const versionCheckSource = readFileSync(VERSION_CHECK_SCRIPT, 'utf-8');
 
 function runVersionCheck(root: string) {
-  const env = { ...process.env, CLAUDE_PLUGIN_ROOT: root };
+  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PLUGIN_ROOT: root };
   delete env.CLAUDE_MEM_CODEX_HOOK;
 
   return spawnSync('node', [VERSION_CHECK_SCRIPT], {
