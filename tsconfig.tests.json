@@ -45,8 +45,6 @@
     "tests/server/mcp/recall-mcp-server.test.ts",
     "tests/server/middleware/request-id.test.ts",
     "tests/server/runtime/active-queue-manager.test.ts",
-    "tests/server/server.test.ts",
-    "tests/server/v1-routes.test.ts",
     "tests/services/sync/chroma-mcp-manager-singleton.test.ts",
     "tests/services/sync/chroma-sync-reconcile.test.ts",
     "tests/services/sync/chroma-sync-watermarks.test.ts",
