@@ -4,8 +4,20 @@ import { Server, type ServerOptions } from '../../src/services/server/Server.js'
 import { ServerV1Routes } from '../../src/server/routes/v1/ServerV1Routes.js';
 import { createServerApiKey } from '../../src/server/auth/sqlite-api-key-service.js';
 import { logger } from '../../src/utils/logger.js';
+import type { Project } from '../../src/core/schemas/project.js';
+import type { ServerSession } from '../../src/core/schemas/session.js';
+import type { MemoryItem } from '../../src/core/schemas/memory-item.js';
+import { readJson } from '../helpers/http-json.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
+
+type ProjectBody = { project: Project };
+type ProjectsBody = { projects: Project[] };
+type SessionBody = { session: ServerSession };
+type MemoryBody = { memory: MemoryItem };
+type SearchBody = { memories: MemoryItem[] };
+type ContextBody = { memories: MemoryItem[]; context: string };
+type ErrorBody = { error: string; message?: string };
 
 describe('server REST API v1 routes', () => {
   let db: Database;
@@ -67,14 +79,14 @@ describe('server REST API v1 routes', () => {
       rootPath: '/tmp/claude-mem',
     });
     expect(projectResponse.status).toBe(201);
-    const { project } = await projectResponse.json();
+    const { project } = await readJson<ProjectBody>(projectResponse);
 
     const sessionResponse = await post('/v1/sessions/start', {
       projectId: project.id,
       memorySessionId: 'memory-1',
     });
     expect(sessionResponse.status).toBe(201);
-    const { session } = await sessionResponse.json();
+    const { session } = await readJson<SessionBody>(sessionResponse);
 
     const eventResponse = await post('/v1/events', {
       projectId: project.id,
@@ -96,41 +108,42 @@ describe('server REST API v1 routes', () => {
       facts: ['BullMQ mode requires Redis or Valkey'],
     });
     expect(memoryResponse.status).toBe(201);
-    const { memory } = await memoryResponse.json();
+    const { memory } = await readJson<MemoryBody>(memoryResponse);
 
     const searchResponse = await post('/v1/search', {
       projectId: project.id,
       query: 'BullMQ',
     });
     expect(searchResponse.status).toBe(200);
-    const search = await searchResponse.json();
-    expect(search.memories.map((item: any) => item.id)).toContain(memory.id);
+    const search = await readJson<SearchBody>(searchResponse);
+    expect(search.memories.map(item => item.id)).toContain(memory.id);
 
     const stemmedSearchResponse = await post('/v1/search', {
       projectId: project.id,
       query: 'queue',
     });
     expect(stemmedSearchResponse.status).toBe(200);
-    const stemmedSearch = await stemmedSearchResponse.json();
-    expect(stemmedSearch.memories.map((item: any) => item.id)).toContain(memory.id);
+    const stemmedSearch = await readJson<SearchBody>(stemmedSearchResponse);
+    expect(stemmedSearch.memories.map(item => item.id)).toContain(memory.id);
 
     const contextResponse = await post('/v1/context', {
       projectId: project.id,
       query: 'Valkey',
     });
     expect(contextResponse.status).toBe(200);
-    const context = await contextResponse.json();
+    const context = await readJson<ContextBody>(contextResponse);
     expect(context.context).toContain('Valkey');
 
     const endResponse = await post(`/v1/sessions/${session.id}/end`, {});
     expect(endResponse.status).toBe(200);
-    expect((await endResponse.json()).session.status).toBe('completed');
+    const ended = await readJson<SessionBody>(endResponse);
+    expect(ended.session.status).toBe('completed');
   });
 
   it('persists a full-field memory create with narrative populated and indexed (#2684)', async () => {
     const projectResponse = await post('/v1/projects', { name: 'Write Path Project' });
     expect(projectResponse.status).toBe(201);
-    const { project } = await projectResponse.json();
+    const { project } = await readJson<ProjectBody>(projectResponse);
 
     const memoryResponse = await post('/v1/memories', {
       projectId: project.id,
@@ -140,7 +153,7 @@ describe('server REST API v1 routes', () => {
       narrative: 'The sync trigger needs narrative populated to index the row.',
     });
     expect(memoryResponse.status).toBe(201);
-    const { memory } = await memoryResponse.json();
+    const { memory } = await readJson<MemoryBody>(memoryResponse);
     expect(memory.narrative).toBe('The sync trigger needs narrative populated to index the row.');
 
     // The narrative column must be populated on the persisted row — the FTS
@@ -154,14 +167,14 @@ describe('server REST API v1 routes', () => {
 
     const searchResponse = await post('/v1/search', { projectId: project.id, query: 'narrative populated' });
     expect(searchResponse.status).toBe(200);
-    const search = await searchResponse.json();
-    expect(search.memories.map((item: any) => item.id)).toContain(memory.id);
+    const search = await readJson<SearchBody>(searchResponse);
+    expect(search.memories.map(item => item.id)).toContain(memory.id);
   });
 
   it('loudly rejects a create with no searchable content instead of persisting an empty row (#2684)', async () => {
     const projectResponse = await post('/v1/projects', { name: 'Reject Empty Project' });
     expect(projectResponse.status).toBe(201);
-    const { project } = await projectResponse.json();
+    const { project } = await readJson<ProjectBody>(projectResponse);
 
     // kind + type present (schema-valid) but every searchable text field empty.
     const memoryResponse = await post('/v1/memories', {
@@ -170,7 +183,7 @@ describe('server REST API v1 routes', () => {
       type: 'note',
     });
     expect(memoryResponse.status).toBe(400);
-    const body = await memoryResponse.json();
+    const body = await readJson<ErrorBody>(memoryResponse);
     expect(body.error).toBe('ValidationError');
 
     // Critically: no empty row was persisted.
@@ -222,7 +235,7 @@ describe('server REST API v1 routes', () => {
   it('denies project creation when an API key is scoped to an existing project', async () => {
     const projectResponse = await post('/v1/projects', { name: 'Owner Project' });
     expect(projectResponse.status).toBe(201);
-    const { project } = await projectResponse.json();
+    const { project } = await readJson<ProjectBody>(projectResponse);
     const key = createServerApiKey(db, {
       name: 'project scoped writer',
       projectId: project.id,
@@ -248,8 +261,8 @@ describe('server REST API v1 routes', () => {
     const projectBResponse = await post('/v1/projects', { name: 'Scoped Project B' });
     expect(projectAResponse.status).toBe(201);
     expect(projectBResponse.status).toBe(201);
-    const { project: projectA } = await projectAResponse.json();
-    await projectBResponse.json();
+    const { project: projectA } = await readJson<ProjectBody>(projectAResponse);
+    await readJson<ProjectBody>(projectBResponse);
     const key = createServerApiKey(db, {
       name: 'project A reader',
       projectId: projectA.id,
@@ -263,8 +276,8 @@ describe('server REST API v1 routes', () => {
     });
 
     expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.projects.map((project: any) => project.id)).toEqual([projectA.id]);
+    const body = await readJson<ProjectsBody>(response);
+    expect(body.projects.map(project => project.id)).toEqual([projectA.id]);
   });
 
   it('rejects mixed-project event batches without partial writes', async () => {
@@ -272,8 +285,8 @@ describe('server REST API v1 routes', () => {
     const projectBResponse = await post('/v1/projects', { name: 'Project B' });
     expect(projectAResponse.status).toBe(201);
     expect(projectBResponse.status).toBe(201);
-    const { project: projectA } = await projectAResponse.json();
-    const { project: projectB } = await projectBResponse.json();
+    const { project: projectA } = await readJson<ProjectBody>(projectAResponse);
+    const { project: projectB } = await readJson<ProjectBody>(projectBResponse);
     const key = createServerApiKey(db, {
       name: 'project A writer',
       projectId: projectA.id,
@@ -314,8 +327,8 @@ describe('server REST API v1 routes', () => {
     const projectBResponse = await post('/v1/projects', { name: 'Memory Project B' });
     expect(projectAResponse.status).toBe(201);
     expect(projectBResponse.status).toBe(201);
-    const { project: projectA } = await projectAResponse.json();
-    const { project: projectB } = await projectBResponse.json();
+    const { project: projectA } = await readJson<ProjectBody>(projectAResponse);
+    const { project: projectB } = await readJson<ProjectBody>(projectBResponse);
     const memoryResponse = await post('/v1/memories', {
       projectId: projectA.id,
       kind: 'manual',
@@ -323,7 +336,7 @@ describe('server REST API v1 routes', () => {
       title: 'Pinned project',
     });
     expect(memoryResponse.status).toBe(201);
-    const { memory } = await memoryResponse.json();
+    const { memory } = await readJson<MemoryBody>(memoryResponse);
 
     const response = await fetch(`http://127.0.0.1:${port}/v1/memories/${memory.id}`, {
       method: 'PATCH',
