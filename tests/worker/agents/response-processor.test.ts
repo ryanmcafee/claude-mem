@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach, afterAll, spyOn } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach, afterAll, spyOn, type Mock } from 'bun:test';
 import { existsSync, readFileSync } from 'fs';
 import { logger } from '../../../src/utils/logger.js';
 
@@ -105,9 +105,12 @@ import type { WorkerRef, StorageResult } from '../../../src/services/worker/agen
 import type { ActiveSession } from '../../../src/services/worker-types.js';
 import type { DatabaseManager } from '../../../src/services/worker/DatabaseManager.js';
 import type { SessionManager } from '../../../src/services/worker/SessionManager.js';
+import type { SSEEvent } from '../../../src/services/worker-types.js';
+import { expectDefined } from '../../helpers/expect-defined.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
-let mockFolderClaudeMdEnabled = false;
+// `SettingsDefaultsManager` types every value as a string; keep the fake honest.
+let mockFolderClaudeMdEnabled = 'false';
 let mockUpdateFolderClaudeMdFiles: ReturnType<typeof mock>;
 let claimedMessages: Array<{
   type: 'observation' | 'summarize';
@@ -120,7 +123,7 @@ describe('ResponseProcessor', () => {
   let mockStoreObservations: ReturnType<typeof mock>;
   let mockChromaSyncObservation: ReturnType<typeof mock>;
   let mockChromaSyncSummary: ReturnType<typeof mock>;
-  let mockBroadcast: ReturnType<typeof mock>;
+  let mockBroadcast: Mock<(event: SSEEvent) => void>;
   let mockBroadcastProcessingStatus: ReturnType<typeof mock>;
   let mockDbManager: DatabaseManager;
   let mockSessionManager: SessionManager;
@@ -133,7 +136,7 @@ describe('ResponseProcessor', () => {
       spyOn(logger, 'warn').mockImplementation(() => {}),
       spyOn(logger, 'error').mockImplementation(() => {}),
     ];
-    mockFolderClaudeMdEnabled = false;
+    mockFolderClaudeMdEnabled = 'false';
     claimedMessages = [];
     mockUpdateFolderClaudeMdFiles = mock(() => Promise.resolve());
     mockGetClaimedMessages = mock(() => claimedMessages);
@@ -1006,10 +1009,10 @@ describe('ResponseProcessor', () => {
 
       expect(mockBroadcast).toHaveBeenCalled();
 
-      const observationCall = mockBroadcast.mock.calls.find(
-        (call: any[]) => call[0].type === 'new_observation'
+      const observationCall = expectDefined(
+        mockBroadcast.mock.calls.find(call => call[0].type === 'new_observation'),
+        'a new_observation broadcast',
       );
-      expect(observationCall).toBeDefined();
       expect(observationCall[0].observation.id).toBe(42);
       expect(observationCall[0].observation.project).toBe('repo-b/worktree');
       expect(observationCall[0].observation.title).toBe('Broadcast Test');
@@ -1050,10 +1053,10 @@ describe('ResponseProcessor', () => {
         'TestAgent'
       );
 
-      const summaryCall = mockBroadcast.mock.calls.find(
-        (call: any[]) => call[0].type === 'new_summary'
+      const summaryCall = expectDefined(
+        mockBroadcast.mock.calls.find(call => call[0].type === 'new_summary'),
+        'a new_summary broadcast',
       );
-      expect(summaryCall).toBeDefined();
       expect(summaryCall[0].summary.request).toBe('Build feature');
     });
   });

@@ -41,7 +41,6 @@
     "tests/plugin-version-check.test.ts",
     "tests/sdk/hardened-options-thinking.test.ts",
     "tests/security/observer-tool-enforcement.test.ts",
-    "tests/server/generation/providers.test.ts",
     // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
     // real Worker. Needs the ServerJobQueue test seam narrowed to what the
     // class calls, which BullMQ's unresolved generics block -- tracked in MCAA-432.
@@ -52,7 +51,6 @@
     "tests/services/sync/chroma-mcp-manager-singleton.test.ts",
     "tests/services/sync/chroma-sync-reconcile.test.ts",
     "tests/services/sync/chroma-sync-watermarks.test.ts",
-    "tests/services/worker-spawner.test.ts",
     "tests/shared/kill-process-tree-identity.test.ts",
     "tests/shared/oauth-token.test.ts",
     "tests/shared/observed-billing.test.ts",
@@ -60,7 +58,6 @@
     "tests/sqlite/session-store-synced-at.test.ts",
     "tests/storage/postgres/platform-source-scoping.test.ts",
     "tests/telemetry/skill-id.test.ts",
-    "tests/worker/agents/response-processor.test.ts",
     "tests/worker/http/routes/cloud-sync-routes.test.ts",
     "tests/worker/search/search-orchestrator.test.ts",
     "tests/worker/session-manager-project.test.ts",
