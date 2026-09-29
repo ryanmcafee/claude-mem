@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import {
   fetchWithOpenRouterTokenCompatibility,
   isMaxCompletionTokensCompatibilityError,
+  type FetchLike,
 } from '../../src/shared/openrouter-token-compatibility.js';
 
 const issueReport = readFileSync(new URL('../fixtures/claude-mem-issue-3712.md', import.meta.url), 'utf8');
@@ -28,7 +29,7 @@ describe('OpenRouter token compatibility', () => {
       jsonResponse(400, { error: { message: compatibilityError } }),
       jsonResponse(200, { choices: [{ message: { content: 'ok' } }] }),
     ];
-    const fetchImpl: typeof fetch = async (_input, init) => {
+    const fetchImpl: FetchLike = async (_input, init) => {
       requests.push(init ?? {});
       return responses.shift()!;
     };
