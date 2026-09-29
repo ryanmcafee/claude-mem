@@ -55,7 +55,6 @@
     "tests/shared/observed-billing.test.ts",
     "tests/shared/openrouter-token-compatibility.test.ts",
     "tests/shared/settings-defaults-manager.test.ts",
-    "tests/sqlite/session-store-observations.test.ts",
     "tests/sqlite/session-store-synced-at.test.ts",
     "tests/storage/postgres/platform-source-scoping.test.ts",
     "tests/telemetry/skill-id.test.ts",

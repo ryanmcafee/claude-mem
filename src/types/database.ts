@@ -32,9 +32,16 @@ export interface ObservationRecord {
   created_at: string;
   created_at_epoch: number;
   title?: string;
-  concept?: string;
   prompt_number?: number;
   discovery_tokens?: number;
+  // Added by the structured-observation migration as nullable columns. The four
+  // array columns hold a JSON-encoded string array, not a parsed array.
+  subtitle?: string | null;
+  narrative?: string | null;
+  facts?: string | null;
+  concepts?: string | null;
+  files_read?: string | null;
+  files_modified?: string | null;
   // Added by the agent-attribution migration; null on rows written before it.
   agent_type?: string | null;
   agent_id?: string | null;
