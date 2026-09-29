@@ -12,3 +12,8 @@ export type FetchMock = Mock<FetchImpl> & Pick<typeof fetch, 'preconnect'>;
 export function mockFetch(impl: FetchImpl): FetchMock {
   return Object.assign(mock(impl), { preconnect: globalThis.fetch.preconnect });
 }
+
+/** Same `preconnect` problem, for `spyOn(globalThis, 'fetch').mockImplementation`. */
+export function fetchImpl(impl: FetchImpl): typeof fetch {
+  return Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
+}

@@ -3,21 +3,10 @@ import { logger } from '../../src/utils/logger.js';
 
 import { Server } from '../../src/services/server/Server.js';
 import type { RouteHandler, ServerOptions } from '../../src/services/server/Server.js';
-import type { ObservationQueueHealth } from '../../src/server/queue/queue-health-types.js';
 import { readJson } from '../helpers/http-json.js';
+import type { ErrorBody, HealthBody, ReadinessBody, VersionBody } from '../helpers/server-core-routes.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
-
-type HealthBody = {
-  status: 'ok' | 'degraded';
-  version: string;
-  platform: string;
-  pid: number;
-  initialized: boolean;
-  mcpReady: boolean;
-  queue?: ObservationQueueHealth;
-};
-type ReadinessBody = { status: 'ready' | 'initializing'; mcpReady?: boolean; message?: string };
 
 describe('Server', () => {
   let server: Server;
@@ -406,7 +395,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(200);
 
-      const body = await readJson<{ version: string }>(response);
+      const body = await readJson<VersionBody>(response);
       expect(body.version).toBeDefined();
       expect(typeof body.version).toBe('string');
     });
@@ -424,7 +413,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(404);
 
-      const body = await readJson<{ error: string }>(response);
+      const body = await readJson<ErrorBody>(response);
       expect(body.error).toBe('NotFound');
     });
   });
