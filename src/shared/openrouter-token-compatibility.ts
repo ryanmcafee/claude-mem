@@ -1,3 +1,5 @@
+import type { FetchLike } from './fetch-like.js';
+
 export function isMaxCompletionTokensCompatibilityError(status: number, bodyText: string): boolean {
   let error: Record<string, unknown> | undefined;
   try {
@@ -21,12 +23,6 @@ export function isMaxCompletionTokensCompatibilityError(status: number, bodyText
 
   return status >= 200 && status < 300 && !!error && (mentionsReplacement || hasStructuredFields);
 }
-
-/**
- * Only the call signature: this module never reaches `fetch.preconnect`, and
- * demanding `typeof fetch` would reject any caller-supplied transport.
- */
-export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export async function fetchWithOpenRouterTokenCompatibility(
   fetchImpl: FetchLike,

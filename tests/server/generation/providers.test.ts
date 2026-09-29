@@ -20,6 +20,7 @@ import {
 import { OpenRouterObservationProvider } from '../../../src/server/generation/providers/OpenRouterObservationProvider.js';
 import { buildServerGenerationPrompt } from '../../../src/server/generation/providers/shared/prompt-builder.js';
 import type { ServerGenerationContext } from '../../../src/server/generation/providers/shared/types.js';
+import type { FetchLike } from '../../../src/shared/fetch-like.js';
 
 function makeContext(overrides: Partial<{ payload: unknown; serverSessionId: string | null; sourceType: 'agent_event' | 'session_summary' }> = {}): ServerGenerationContext {
   return {
@@ -58,6 +59,7 @@ function makeContext(overrides: Partial<{ payload: unknown; serverSessionId: str
         sourceEventId: null,
         idempotencyKey: 'k',
         eventType: 'tool_use',
+        platformSource: null,
         payload: overrides.payload ?? { tool: 'bash', input: 'ls' },
         metadata: {},
         occurredAtEpoch: 0,
@@ -217,7 +219,7 @@ describe('buildServerGenerationPrompt', () => {
 
 class FakeFetch {
   constructor(private readonly response: Response | (() => Response)) {}
-  fetch: typeof fetch = async () => {
+  fetch: FetchLike = async () => {
     return typeof this.response === 'function' ? this.response() : this.response;
   };
 }
@@ -226,7 +228,7 @@ class CapturingFetch {
   lastUrl: string | undefined;
   lastInit: RequestInit | undefined;
   constructor(private readonly response: Response) {}
-  fetch: typeof fetch = async (input, init) => {
+  fetch: FetchLike = async (input, init) => {
     this.lastUrl = typeof input === 'string' ? input : input.toString();
     this.lastInit = init;
     return this.response;
@@ -399,7 +401,7 @@ describe('OpenRouterObservationProvider', () => {
       jsonResponse(400, { error: { message: compatibilityError } }),
       jsonResponse(200, { choices: [{ message: { content: '<observation>ok</observation>' } }], usage: { total_tokens: 11 } }),
     ];
-    const fetchImpl: typeof fetch = async (_input, init) => {
+    const fetchImpl: FetchLike = async (_input, init) => {
       requests.push(init ?? {});
       return responses.shift()!;
     };

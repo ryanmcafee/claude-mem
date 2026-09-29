@@ -3,8 +3,8 @@ import { readFileSync } from 'fs';
 import {
   fetchWithOpenRouterTokenCompatibility,
   isMaxCompletionTokensCompatibilityError,
-  type FetchLike,
 } from '../../src/shared/openrouter-token-compatibility.js';
+import type { FetchLike } from '../../src/shared/fetch-like.js';
 
 const issueReport = readFileSync(new URL('../fixtures/claude-mem-issue-3712.md', import.meta.url), 'utf8');
 const compatibilityError = issueReport.match(/Unsupported parameter:[\s\S]*?instead\./)?.[0] ?? '';
