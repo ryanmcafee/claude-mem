@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'child_process';
-import { readFileSync } from 'fs';
+import { appendFileSync, readFileSync } from 'fs';
 import { basename } from 'path';
 import {
   killProcessTree,
@@ -36,6 +36,40 @@ import { isPidAlive } from '../../src/supervisor/process-registry.js';
 const isWindows = process.platform === 'win32';
 const strays: number[] = [];
 
+/**
+ * Per-test PID ledger, consumed by scripts/tree-kill-survivor-census.ts.
+ *
+ * Off unless CLAUDE_MEM_TREE_KILL_PID_LEDGER names a file, so only CI pays for
+ * it. Without it a survivor can only be counted, never attributed: every test
+ * here spawns the same `ping -n 120` / `sleep 120` fixture, so the process
+ * table alone cannot say which one left the process behind. Inferring it from
+ * declaration order is what this exists to replace.
+ */
+const pidLedgerPath = process.env.CLAUDE_MEM_TREE_KILL_PID_LEDGER ?? null;
+
+/** Set by treeKillTest before each body, so the recorders need no argument. */
+let owningTest = '(outside any test)';
+
+function recordPid(role: 'root' | 'descendant', pid: number, startToken: string | null): void {
+  if (!pidLedgerPath) return;
+  const record = { test: owningTest, role, pid, startToken, at: new Date().toISOString() };
+  appendFileSync(pidLedgerPath, `${JSON.stringify(record)}\n`);
+}
+
+/**
+ * Declares a suite test and binds the fixture PIDs it creates to its name.
+ *
+ * The name reaches the ledger from the same string `it` reports to junit, so a
+ * renamed test cannot drift away from the attribution that quotes it.
+ */
+function treeKillTest(name: string, body: () => Promise<void>, options: { windowsOnly?: boolean } = {}): void {
+  const declare = options.windowsOnly ? it.if(isWindows) : it;
+  declare(name, async () => {
+    owningTest = name;
+    await body();
+  }, 60_000);
+}
+
 function settle(ms = 600): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -57,7 +91,12 @@ function spawnTwoLevelTree(): ChildProcess {
   const child = isWindows
     ? spawn('cmd.exe', ['/c', 'ping -n 120 127.0.0.1 > NUL'], { stdio: 'ignore', windowsHide: true })
     : spawn('/bin/sh', ['-c', 'sleep 120 & wait'], { stdio: 'ignore' });
-  if (child.pid) strays.push(child.pid);
+  if (child.pid) {
+    strays.push(child.pid);
+    // The token makes the ledger entry falsifiable: the census refuses to
+    // charge a leak to this test once the OS has reissued the number.
+    recordPid('root', child.pid, captureProcessStartToken(child.pid));
+  }
   return child;
 }
 
@@ -89,7 +128,10 @@ function imageNameOf(pid: number): string | null {
  */
 async function enumerateDescendants(rootPid: number): Promise<DescendantIdentity[]> {
   const descendants = await collectDescendantIdentities(rootPid);
-  for (const entry of descendants) strays.push(entry.pid);
+  for (const entry of descendants) {
+    strays.push(entry.pid);
+    recordPid('descendant', entry.pid, entry.startToken);
+  }
   return descendants;
 }
 
@@ -126,7 +168,7 @@ afterAll(() => {
 });
 
 describe('killProcessTree end-to-end on this platform', () => {
-  it('discovers descendants through the production enumeration', async () => {
+  treeKillTest('discovers descendants through the production enumeration', async () => {
     const root = spawnTwoLevelTree();
     await settle();
 
@@ -137,9 +179,9 @@ describe('killProcessTree end-to-end on this platform', () => {
     expect(isPidAlive(payloadPid(descendants))).toBe(true);
 
     try { process.kill(root.pid!, 'SIGKILL'); } catch { /* fine */ }
-  }, 60_000);
+  });
 
-  it('kills the root AND its descendant', async () => {
+  treeKillTest('kills the root AND its descendant', async () => {
     const root = spawnTwoLevelTree();
     await settle();
 
@@ -152,7 +194,7 @@ describe('killProcessTree end-to-end on this platform', () => {
     // Every enumerated PID, payload included — not whichever one the process
     // table happened to list first.
     expect(await survivorsOf(subtree)).toEqual([]);
-  }, 60_000);
+  });
 
   /**
    * Windows-only because the condition is only OBSERVABLE there: Win32_Process
@@ -165,7 +207,7 @@ describe('killProcessTree end-to-end on this platform', () => {
    * enumerating descendants — precisely the case where children outlived the
    * root and may still hold the worker port.
    */
-  it.if(isWindows)('reaps a descendant when the root is already gone at call time', async () => {
+  treeKillTest('reaps a descendant when the root is already gone at call time', async () => {
     const root = spawnTwoLevelTree();
     await settle();
 
@@ -182,9 +224,9 @@ describe('killProcessTree end-to-end on this platform', () => {
     await killProcessTree(root.pid!);
 
     expect(await survivorsOf(descendants.map(entry => entry.pid))).toEqual([]);
-  }, 60_000);
+  }, { windowsOnly: true });
 
-  it('treats an already-dead target as success, not failure', async () => {
+  treeKillTest('treats an already-dead target as success, not failure', async () => {
     // Windows: taskkill exits 128 / "not found". POSIX: ESRCH. Both are the
     // tolerated case — a throw here would make `server stop` report a failed
     // stop for a server that had already exited.
@@ -205,9 +247,9 @@ describe('killProcessTree end-to-end on this platform', () => {
 
     // Second call against the corpse must resolve, not reject.
     await killProcessTree(pid);
-  }, 60_000);
+  });
 
-  it('is a complete no-op when the root identity does not match', async () => {
+  treeKillTest('is a complete no-op when the root identity does not match', async () => {
     const root = spawnTwoLevelTree();
     await settle();
 
@@ -222,13 +264,14 @@ describe('killProcessTree end-to-end on this platform', () => {
 
     expect(subtree.filter(pid => !isPidAlive(pid))).toEqual([]);
 
-    // Killing only descendants[0] here leaked a `ping` on every soak draw.
-    for (const pid of subtree) {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* fine */ }
-    }
-  }, 60_000);
+    // Teardown through the production path, and asserted. Hand-killing the
+    // subtree PID by PID leaked a `ping` on every soak draw when it took only
+    // descendants[0], and a swallowed `catch` could not report that it had.
+    await killProcessTree(root.pid!);
+    expect(await survivorsOf(subtree)).toEqual([]);
+  });
 
-  it('still kills when the supplied root identity matches', async () => {
+  treeKillTest('still kills when the supplied root identity matches', async () => {
     // The other half: without this, the no-op case above would pass for a
     // build where the gate rejected everything.
     const root = spawnTwoLevelTree();
@@ -244,5 +287,5 @@ describe('killProcessTree end-to-end on this platform', () => {
     await killProcessTree(root.pid!, { expectedStartToken: token });
 
     expect(await survivorsOf(subtree)).toEqual([]);
-  }, 60_000);
+  });
 });
