@@ -8,6 +8,11 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // Suites that import a `.mjs` operator script get its types inferred from
+    // that file's own JSDoc, rather than from a separate `.d.mts` that nothing
+    // holds to the implementation. The script bodies stay unchecked (no
+    // `checkJs`), so an unannotated export still resolves to `any`.
+    "allowJs": true,
     "rootDir": ".",
     "declaration": false,
     "declarationMap": false,
@@ -29,7 +34,6 @@
     "tests/cli/handlers/session-init-plugin-cache-skip.test.ts",
     "tests/cli/server-jobs.test.ts",
     "tests/cli/worker-failure-latch.test.ts",
-    "tests/grok-bot-session-inject.test.ts",
     "tests/hook-lifecycle.test.ts",
     "tests/hooks/server-client.test.ts",
     "tests/infrastructure/cleanup-v12_4_3.test.ts",

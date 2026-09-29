@@ -475,8 +475,17 @@ function isBoilerplate(line) {
 }
 
 /**
+ * One parsed index row. `id` is null only for the "no previous sessions" row.
+ *
+ * @typedef {{ id: string | null, raw: string }} TimelineRow
+ */
+
+/**
  * Parse editable-bucket / inject markdown into index rows.
  * Observation and summary rows keep their source ID (Phase 0 packet intent).
+ *
+ * @param {string} text
+ * @returns {TimelineRow[]}
  */
 export function parseTimelineRows(text) {
   const rows = [];
@@ -502,6 +511,10 @@ export function parseTimelineRows(text) {
 /**
  * Newest-first slide-off. Inject/bucket markdown is oldest-first under day
  * headers, so the last parsed row is the freshest.
+ *
+ * @param {TimelineRow[]} rows
+ * @param {number | string | null | undefined} window
+ * @returns {{ kept: TimelineRow[], omitted: number }}
  */
 export function slideWindow(rows, window) {
   const size = resolveIndexWindow(window, undefined, DEFAULT_INDEX_WINDOW);
@@ -516,6 +529,20 @@ export function slideWindow(rows, window) {
  * One observation per line (rich index, not a packed 2-line pointer).
  * Newest first. Slide-off drops the oldest rows past `window`.
  * Every kept observation/summary row still carries its ID.
+ *
+ * `projects` is required despite the destructuring default: the last entry
+ * names the index, and omitting it throws.
+ *
+ * @param {string} text
+ * @param {{
+ *   projects: string[],
+ *   window?: number | string | null,
+ *   maxLines?: number | string | null,
+ *   maxLineChars?: number | null,
+ *   tier?: string,
+ *   now?: Date,
+ * }} options
+ * @returns {string[]}
  */
 export function injectTextToFactLines(text, {
   projects,
