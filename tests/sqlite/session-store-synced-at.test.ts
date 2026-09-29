@@ -218,6 +218,7 @@ describe('SessionStore SyncHub launch baseline', () => {
         CLAUDE_MEM_CLOUD_SYNC_USER_ID: 'test-user',
         CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://hub.test',
         CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: 'epoch-boundary-device',
+        CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: 'epoch-boundary-test',
       });
       expect(sync.status().pending).toEqual({
         observations: 1,
