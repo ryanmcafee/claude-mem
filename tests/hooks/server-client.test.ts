@@ -24,7 +24,7 @@ import {
   ServerClientError,
   isServerClientError,
 } from '../../src/services/hooks/server-client.js';
-import { mockFetch } from '../helpers/fetch-mock';
+import { mockFetch, requestUrl } from '../helpers/fetch-mock';
 
 interface CapturedRequest {
   url: string;
@@ -50,7 +50,7 @@ function installFetch(handler: (req: CapturedRequest) => Response | Promise<Resp
       }
     }
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
-    const req: CapturedRequest = { url, method: String(init.method ?? 'GET'), headers, body };
+    const req: CapturedRequest = { url: requestUrl(url), method: String(init.method ?? 'GET'), headers, body };
     captured.push(req);
     return handler(req);
   });
