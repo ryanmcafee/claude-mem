@@ -31,16 +31,17 @@
     "tests/cli/worker-failure-latch.test.ts",
     "tests/grok-bot-session-inject.test.ts",
     "tests/hook-lifecycle.test.ts",
-    "tests/hooks/file-context.test.ts",
     "tests/hooks/server-client.test.ts",
     "tests/infrastructure/cleanup-v12_4_3.test.ts",
     "tests/install-error-matrix.test.ts",
-    "tests/integration/hook-execution-e2e.test.ts",
     "tests/integrations/telegram-wrapup-notifier.test.ts",
     "tests/plugin-version-check.test.ts",
     "tests/sdk/hardened-options-thinking.test.ts",
     "tests/security/observer-tool-enforcement.test.ts",
     "tests/server/generation/providers.test.ts",
+    // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
+    // real Worker. Needs the ServerJobQueue test seam narrowed to what the
+    // class calls, which BullMQ's unresolved generics block -- tracked in MCAA-432.
     "tests/server/jobs/server-job-queue.test.ts",
     "tests/server/mcp/recall-mcp-server.test.ts",
     "tests/server/middleware/request-id.test.ts",

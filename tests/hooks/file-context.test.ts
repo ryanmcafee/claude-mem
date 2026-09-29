@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, utimesSync, rmSync } from 'fs';
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { resolveDbPath } from '../../src/shared/paths.js';
+import { fetchImpl } from '../helpers/fetch-mock.js';
 
 // Capture the REAL modules BEFORE mocking so afterAll can restore them.
 // bun's `mock.module` is process-global and sticky; `mock.restore()` does NOT
@@ -272,13 +273,13 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     writeFileSync(otherFile, PADDING);
 
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(url => {
       const text = String(url);
       if (text.includes('other.md')) {
         return Promise.resolve(makeObservationsResponse([{ id: 2, created_at_epoch: future, title: 'Other file context' }]));
       }
       return Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future, title: 'Main file context' }]));
-    });
+    }));
 
     const result = await fileContextHandler.execute({
       sessionId: 'sess',
@@ -298,13 +299,13 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     writeFileSync(otherFile, PADDING);
 
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(url => {
       const text = String(url);
       if (text.includes('other.md')) {
         return Promise.reject(new Error('worker unavailable'));
       }
       return Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future, title: 'Main file context' }]));
-    });
+    }));
 
     const result = await fileContextHandler.execute({
       sessionId: 'sess',
@@ -321,10 +322,10 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
   it('queries with BOTH absolute and cwd-relative path candidates (#2691)', async () => {
     const future = Date.now() + 60_000;
     let capturedUrl = '';
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(url => {
       capturedUrl = String(url);
       return Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]));
-    });
+    }));
 
     await fileContextHandler.execute({
       sessionId: 'sess',
@@ -347,9 +348,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     const future = Date.now() + 60_000;
     // mockImplementation (not mockResolvedValue): each call needs a FRESH
     // Response — a Response body can only be consumed once.
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     const first = await fileContextHandler.execute({
       sessionId: 'sess-dedupe',
@@ -371,9 +372,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('persists the injection gate as a SQLite row, not a JSON side-store (#3608 step 4)', async () => {
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     const injected = await fileContextHandler.execute({
       sessionId: 'sess-sqlite-gate',
@@ -415,9 +416,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
   it('never rolls the stored epoch back to an older observation (#3608 step 4)', async () => {
     const newer = Date.now() + 120_000;
     const older = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 2, created_at_epoch: newer }]))
-    );
+    ));
     await fileContextHandler.execute({
       sessionId: 'sess-monotonic',
       cwd: tmpDir,
@@ -428,9 +429,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     // A hook that finishes late carrying an OLDER epoch must neither inject nor
     // downgrade the row — otherwise the next Read re-injects a stale timeline.
     fetchSpy.mockRestore();
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: older }]))
-    );
+    ));
     const late = await fileContextHandler.execute({
       sessionId: 'sess-monotonic',
       cwd: tmpDir,
@@ -452,9 +453,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('fails open when the gate database cannot be opened (#3608 step 4)', async () => {
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     // Data dir nested under a regular FILE: every mkdir/open against it fails
     // with ENOTDIR, so the gate is unusable. A broken gate must never break a
@@ -483,9 +484,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('re-injects when a NEW observation is recorded since the last injection (#3480)', async () => {
     const first_epoch = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: first_epoch }]))
-    );
+    ));
     const first = await fileContextHandler.execute({
       sessionId: 'sess-new-obs',
       cwd: tmpDir,
@@ -496,12 +497,12 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
     // A newer observation lands → re-injection is expected, not deduped.
     fetchSpy.mockRestore();
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([
         { id: 1, created_at_epoch: first_epoch },
         { id: 2, created_at_epoch: first_epoch + 30_000, title: 'Fresh observation' },
       ]))
-    );
+    ));
     const second = await fileContextHandler.execute({
       sessionId: 'sess-new-obs',
       cwd: tmpDir,
@@ -513,9 +514,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('dedupe is scoped per session — a different session still gets its injection (#3480)', async () => {
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     await fileContextHandler.execute({
       sessionId: 'sess-A',
@@ -554,9 +555,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('isolates sessions whose ids differ only in path-sanitized chars (#3486)', async () => {
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     // "a.b" and "a:b" are DISTINCT sessions that both collapse to "a_b" under a
     // naive char-replace scheme. The second session must still get its injection.
@@ -578,9 +579,9 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
 
   it('dedupes dot-segment path aliases of the same file in a session (#3486)', async () => {
     const future = Date.now() + 60_000;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl(() =>
       Promise.resolve(makeObservationsResponse([{ id: 1, created_at_epoch: future }]))
-    );
+    ));
 
     const subDir = join(tmpDir, 'sub');
     mkdirSync(subDir);
