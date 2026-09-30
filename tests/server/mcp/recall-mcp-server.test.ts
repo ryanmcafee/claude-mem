@@ -54,9 +54,14 @@ async function connectClient(backend: RecallBackend): Promise<Client> {
   return client;
 }
 
-function textOf(result: { content: unknown }): string {
-  const first = (result.content as Array<{ type: string; text?: string }>)[0];
-  return first?.text ?? '';
+type ToolResult = Awaited<ReturnType<Client['callTool']>>;
+
+function textOf(result: ToolResult): string {
+  if (!('content' in result) || !Array.isArray(result.content)) {
+    throw new Error('expected a content tool result, not the legacy toolResult shape');
+  }
+  const first = result.content[0];
+  return first?.type === 'text' ? first.text : '';
 }
 
 describe('createRecallMcpServer', () => {

@@ -1,6 +1,6 @@
 
 import path from 'path';
-import { existsSync, writeFileSync, mkdirSync, rmSync, statSync, copyFileSync, statfsSync } from 'fs';
+import { existsSync, writeFileSync, mkdirSync, rmSync, statSync, copyFileSync, statfsSync, type StatsFs } from 'fs';
 import { Database } from 'bun:sqlite';
 import { DATA_DIR, OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -15,6 +15,9 @@ interface CleanupCounts {
   stuckPendingMessages: number;
 }
 
+/** The disk-space pre-flight reads only these two fields; `statfsSync` satisfies it. */
+export type StatfsReader = (path: string) => Pick<StatsFs, 'bsize' | 'bavail'>;
+
 interface MarkerPayload {
   appliedAt: string;
   backupPath: string | null;
@@ -26,7 +29,7 @@ interface MarkerPayload {
 
 export function runOneTimeV12_4_3Cleanup(
   dataDirectory?: string,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; statfs?: StatfsReader } = {},
 ): CleanupCounts | undefined {
   const dryRun = options.dryRun === true;
   const effectiveDataDir = dataDirectory ?? DATA_DIR;
@@ -68,7 +71,7 @@ export function runOneTimeV12_4_3Cleanup(
   logger.warn('SYSTEM', 'Running one-time v12.4.3 pollution cleanup', { dbPath });
 
   try {
-    executeCleanup(dbPath, effectiveDataDir, markerPath);
+    executeCleanup(dbPath, effectiveDataDir, markerPath, options.statfs ?? statfsSync);
   } catch (err: unknown) {
     const error = err instanceof Error ? err : new Error(String(err));
     logger.error('SYSTEM', 'v12.4.3 cleanup failed, marker not written (will retry on next startup)', {}, error);
@@ -117,14 +120,19 @@ function scanCleanupCounts(dbPath: string): CleanupCounts {
   return counts;
 }
 
-function executeCleanup(dbPath: string, effectiveDataDir: string, markerPath: string): void {
+function executeCleanup(
+  dbPath: string,
+  effectiveDataDir: string,
+  markerPath: string,
+  statfs: StatfsReader,
+): void {
   const dbSize = statSync(dbPath).size;
   const required = Math.ceil(dbSize * 1.2) + 100 * 1024 * 1024;
 
   let backupPath: string | null = null;
-  let fsStats: ReturnType<typeof statfsSync> | undefined;
+  let fsStats: ReturnType<StatfsReader> | undefined;
   try {
-    fsStats = statfsSync(effectiveDataDir);
+    fsStats = statfs(effectiveDataDir);
   } catch (err: unknown) {
     const error = err instanceof Error ? err : new Error(String(err));
     logger.warn('SYSTEM', 'statfsSync failed; proceeding without disk-space pre-flight', {}, error);

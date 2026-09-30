@@ -238,28 +238,24 @@ describe('Codex CLI Compatibility (#744)', () => {
   });
 
   describe('session-init handler undefined prompt', () => {
-    it('should not throw when prompt is undefined', () => {
-      const rawPrompt: string | undefined = undefined;
-      const prompt = (!rawPrompt || !rawPrompt.trim()) ? '[media prompt]' : rawPrompt;
-      expect(prompt).toBe('[media prompt]');
+    it('should not throw when prompt is undefined', async () => {
+      const { promptOrMediaPlaceholder, MEDIA_PROMPT_PLACEHOLDER } = await import('../src/cli/handlers/session-init.js');
+      expect(promptOrMediaPlaceholder(undefined)).toBe(MEDIA_PROMPT_PLACEHOLDER);
     });
 
-    it('should not throw when prompt is empty string', () => {
-      const rawPrompt = '';
-      const prompt = (!rawPrompt || !rawPrompt.trim()) ? '[media prompt]' : rawPrompt;
-      expect(prompt).toBe('[media prompt]');
+    it('should not throw when prompt is empty string', async () => {
+      const { promptOrMediaPlaceholder, MEDIA_PROMPT_PLACEHOLDER } = await import('../src/cli/handlers/session-init.js');
+      expect(promptOrMediaPlaceholder('')).toBe(MEDIA_PROMPT_PLACEHOLDER);
     });
 
-    it('should not throw when prompt is whitespace-only', () => {
-      const rawPrompt = '   ';
-      const prompt = (!rawPrompt || !rawPrompt.trim()) ? '[media prompt]' : rawPrompt;
-      expect(prompt).toBe('[media prompt]');
+    it('should not throw when prompt is whitespace-only', async () => {
+      const { promptOrMediaPlaceholder, MEDIA_PROMPT_PLACEHOLDER } = await import('../src/cli/handlers/session-init.js');
+      expect(promptOrMediaPlaceholder('   ')).toBe(MEDIA_PROMPT_PLACEHOLDER);
     });
 
-    it('should preserve valid prompts', () => {
-      const rawPrompt = 'fix the bug';
-      const prompt = (!rawPrompt || !rawPrompt.trim()) ? '[media prompt]' : rawPrompt;
-      expect(prompt).toBe('fix the bug');
+    it('should preserve valid prompts', async () => {
+      const { promptOrMediaPlaceholder } = await import('../src/cli/handlers/session-init.js');
+      expect(promptOrMediaPlaceholder('fix the bug')).toBe('fix the bug');
     });
   });
 });

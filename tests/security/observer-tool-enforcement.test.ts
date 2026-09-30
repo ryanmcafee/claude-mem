@@ -9,6 +9,7 @@ import {
   getObserverAuditLogPath,
 } from '../../src/utils/observer-audit.js';
 import { OBSERVER_SESSIONS_DIR } from '../../src/shared/paths.js';
+import { expectDefined } from '../helpers/expect-defined.js';
 
 const BASE_INPUT = {
   source: 'Observer' as const,
@@ -104,10 +105,12 @@ describe('Observer/KnowledgeAgent SDK tool enforcement (hardened-options)', () =
       const opts = buildHardenedSdkOptions(input);
       const canUseTool = opts.canUseTool;
       if (!canUseTool) throw new Error('canUseTool missing');
-      return canUseTool(toolName, toolInput, {
+      const result = await canUseTool(toolName, toolInput, {
         signal: new AbortController().signal,
         toolUseID: 'test-tool-use-id',
+        requestId: 'test-request-id',
       });
+      return expectDefined(result, 'canUseTool result');
     };
 
     it('denies Write and records a denied audit entry', async () => {

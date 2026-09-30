@@ -52,6 +52,7 @@ import {
   updateFolderClaudeMdFiles,
   getTargetFilename
 } from '../../src/utils/claude-md-utils.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 let tempDir: string;
 const originalFetch = global.fetch;
@@ -291,7 +292,7 @@ describe('issue #1165 - prevent CLAUDE.md inside .git directories', () => {
 
 describe('updateFolderClaudeMdFiles', () => {
   it('should skip when filePaths is empty', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles([], 'test-project', 37777);
@@ -310,7 +311,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -337,7 +338,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -352,7 +353,7 @@ describe('updateFolderClaudeMdFiles', () => {
     const folderPath = join(tempDir, 'error-test');
     const filePath = join(folderPath, 'test.ts');
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: false,
       status: 404
     } as Response));
@@ -367,7 +368,7 @@ describe('updateFolderClaudeMdFiles', () => {
     const folderPath = join(tempDir, 'network-error-test');
     const filePath = join(folderPath, 'test.ts');
 
-    global.fetch = mock(() => Promise.reject(new Error('Network error')));
+    global.fetch = mockFetch(() => Promise.reject(new Error('Network error')));
 
     await expect(updateFolderClaudeMdFiles([filePath], 'test-project', 37777)).resolves.toBeUndefined();
 
@@ -382,7 +383,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -410,7 +411,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -438,7 +439,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -463,7 +464,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -492,7 +493,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -519,7 +520,7 @@ describe('updateFolderClaudeMdFiles', () => {
       }]
     };
 
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -541,7 +542,7 @@ describe('updateFolderClaudeMdFiles', () => {
     // The empty strings are filtered out, leaving one valid folder that
     // triggers exactly one fetch — which then reads the JSON body, so the
     // mock must provide json() like a real ok Response.
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve({ content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }] })
     } as Response));
@@ -562,7 +563,7 @@ describe('updateFolderClaudeMdFiles', () => {
 
 describe('path validation in updateFolderClaudeMdFiles', () => {
   it('should reject tilde paths', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -576,7 +577,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
   });
 
   it('should reject URLs', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -590,7 +591,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
   });
 
   it('should reject paths with spaces', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -604,7 +605,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
   });
 
   it('should reject paths with hash symbols', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -618,7 +619,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
   });
 
   it('should reject path traversal outside project', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -632,7 +633,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
   });
 
   it('should reject absolute paths outside project root', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -649,7 +650,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -671,7 +672,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -691,7 +692,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -710,7 +711,7 @@ describe('path validation in updateFolderClaudeMdFiles', () => {
 
 describe('issue #814 - reject consecutive duplicate path segments', () => {
   it('should reject paths with consecutive duplicate segments like frontend/frontend/', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -724,7 +725,7 @@ describe('issue #814 - reject consecutive duplicate path segments', () => {
   });
 
   it('should reject paths with consecutive duplicate segments like src/src/', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -741,7 +742,7 @@ describe('issue #814 - reject consecutive duplicate path segments', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -760,7 +761,7 @@ describe('issue #814 - reject consecutive duplicate path segments', () => {
 
 describe('issue #859 - skip folders with active CLAUDE.md', () => {
   it('should skip folder when CLAUDE.md was read in observation', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -774,7 +775,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
   });
 
   it('should skip folder when CLAUDE.md was modified in observation', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -791,7 +792,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -814,7 +815,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
   });
 
   it('should handle relative CLAUDE.md paths with projectRoot', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -831,7 +832,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -854,7 +855,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
   });
 
   it('should still exclude project root even when CLAUDE.md filter would allow it', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     const projectRoot = join(tempDir, 'git-project');
@@ -874,7 +875,7 @@ describe('issue #859 - skip folders with active CLAUDE.md', () => {
 
 describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => {
   it('should skip node_modules directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -888,7 +889,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
   });
 
   it('should skip .git directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -902,7 +903,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
   });
 
   it('should skip Android res/ directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -916,7 +917,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
   });
 
   it('should skip build/ directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -930,7 +931,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
   });
 
   it('should skip __pycache__/ directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -947,7 +948,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -964,7 +965,7 @@ describe('issue #912 - skip unsafe directories for CLAUDE.md generation', () => 
   });
 
   it('should skip deeply nested unsafe directories', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -1046,7 +1047,7 @@ describe('CLAUDE.local.md support', () => {
   });
 
   it('should skip folder when CLAUDE.local.md was read in observation', async () => {
-    const fetchMock = mock(() => Promise.resolve({ ok: true } as Response));
+    const fetchMock = mockFetch(() => Promise.resolve({ ok: true } as Response));
     global.fetch = fetchMock;
 
     await updateFolderClaudeMdFiles(
@@ -1063,7 +1064,7 @@ describe('CLAUDE.local.md support', () => {
     const apiResponse = {
       content: [{ text: '| #123 | 4:30 PM | 🔵 | Test | ~100 |' }]
     };
-    const fetchMock = mock(() => Promise.resolve({
+    const fetchMock = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(apiResponse)
     } as Response));
@@ -1117,7 +1118,7 @@ describe('skeleton CLAUDE.md deny-list (#2400)', () => {
     mkdirSync(folderPath, { recursive: true });
     const filePath = join(folderPath, 'file.ts');
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(emptySkeletonResponse),
     } as Response));
@@ -1137,7 +1138,7 @@ describe('skeleton CLAUDE.md deny-list (#2400)', () => {
     writeFileSync(claudeMdPath, userContent);
     const filePath = join(folderPath, 'file.ts');
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(emptySkeletonResponse),
     } as Response));
@@ -1155,7 +1156,7 @@ describe('skeleton CLAUDE.md deny-list (#2400)', () => {
     mkdirSync(folderPath, { recursive: true });
     const filePath = join(folderPath, 'file.ts');
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve({
         content: [{ text: '| #123 | 4:30 PM | 🔵 | Real observation | ~100 |' }],
@@ -1178,7 +1179,7 @@ describe('skeleton CLAUDE.md deny-list (#2400)', () => {
     writeFileSync(claudeMdPath, 'PRE-EXISTING');
     const filePath = join(folderPath, 'file.ts');
 
-    global.fetch = mock(() => Promise.resolve({
+    global.fetch = mockFetch(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve(emptySkeletonResponse),
     } as Response));

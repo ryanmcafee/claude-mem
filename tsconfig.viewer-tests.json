@@ -1,0 +1,19 @@
+// Viewer tests reach into `src/ui/viewer`, which needs the DOM lib that
+// `tsconfig.tests.json` deliberately does not carry. They get the viewer's own
+// compiler options instead of widening the lib for every other suite.
+{
+  "extends": "./src/ui/viewer/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "tests/viewer/**/*.ts",
+    "tests/viewer/**/*.tsx",
+    "src/ui/viewer/**/*",
+    "src/**/*.d.ts"
+  ]
+}

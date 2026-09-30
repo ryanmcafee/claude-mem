@@ -7,6 +7,7 @@ import {
   parseRetryAfterMs,
 } from './shared/error-classification.js';
 import { buildServerGenerationPrompt } from './shared/prompt-builder.js';
+import type { FetchLike } from '../../../shared/fetch-like.js';
 import type {
   ServerGenerationContext,
   ServerGenerationProvider,
@@ -24,7 +25,7 @@ export interface GeminiObservationProviderOptions {
   apiKey: string;
   model?: string;
   maxOutputTokens?: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
 }
 
 interface GeminiResponse {
@@ -130,7 +131,7 @@ export class GeminiObservationProvider implements ServerGenerationProvider {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly maxOutputTokens: number;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: FetchLike;
 
   constructor(options: GeminiObservationProviderOptions) {
     if (!options.apiKey) {

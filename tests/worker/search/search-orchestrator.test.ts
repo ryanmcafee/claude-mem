@@ -1,7 +1,8 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { SearchOrchestrator } from '../../../src/services/worker/search/SearchOrchestrator.js';
+import type { ObservationSearchResult } from '../../../src/services/sqlite/types.js';
 
-const observation = {
+const observation: ObservationSearchResult = {
   id: 21,
   memory_session_id: 'cursor-memory',
   project: 'orchestrator-project',

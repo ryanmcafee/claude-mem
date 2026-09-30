@@ -123,6 +123,9 @@ export interface HardenedSdkOptionsInput {
  * `query()` call. Both call sites MUST go through this helper so the lockdown
  * cannot drift between them.
  */
+// Spreads skip excess-property checks, so the key is typed here where a misspelling fails.
+const OBSERVER_THINKING: Pick<Options, 'thinking'> = { thinking: { type: 'disabled' } };
+
 export function buildHardenedSdkOptions(input: HardenedSdkOptionsInput): Options {
   const canUseTool: Options['canUseTool'] = async (toolName, toolInput) => {
     recordObserverToolAttempt({
@@ -157,7 +160,7 @@ export function buildHardenedSdkOptions(input: HardenedSdkOptionsInput): Options
     ...(input.resume ? { resume: input.resume } : {}),
     ...(input.spawnClaudeCodeProcess ? { spawnClaudeCodeProcess: input.spawnClaudeCodeProcess } : {}),
     // Observer thinking is behavior-only and does not participate in the lockdown boundary.
-    ...(input.source === 'Observer' ? { thinkingConfig: { type: 'disabled' as const } } : {}),
+    ...(input.source === 'Observer' ? OBSERVER_THINKING : {}),
 
     // === Tool lockdown (defense-in-depth) ===
     tools: [],                                        // belt: disable ALL built-in tools

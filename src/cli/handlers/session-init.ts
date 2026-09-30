@@ -21,6 +21,12 @@ import {
 } from '../../services/hooks/runtime-selector.js';
 import { isServerClientError } from '../../services/hooks/server-client.js';
 
+export const MEDIA_PROMPT_PLACEHOLDER = '[media prompt]';
+
+export function promptOrMediaPlaceholder(rawPrompt: string | undefined): string {
+  return rawPrompt?.trim() ? rawPrompt : MEDIA_PROMPT_PLACEHOLDER;
+}
+
 interface SessionInitResponse {
   sessionDbId: number;
   promptNumber: number;
@@ -73,7 +79,7 @@ export const sessionInitHandler: EventHandler = {
       return { continue: true, suppressOutput: true };
     }
 
-    const prompt = (!rawPrompt || !rawPrompt.trim()) ? '[media prompt]' : rawPrompt;
+    const prompt = promptOrMediaPlaceholder(rawPrompt);
 
     const project = getProjectContext(cwd).primary;
     const platformSource = normalizePlatformSource(input.platform);
@@ -149,7 +155,7 @@ export const sessionInitHandler: EventHandler = {
 
     let additionalContext = '';
 
-    if (semanticInject && prompt && prompt.length >= 20 && prompt !== '[media prompt]') {
+    if (semanticInject && prompt && prompt.length >= 20 && prompt !== MEDIA_PROMPT_PLACEHOLDER) {
       const limit = settings.CLAUDE_MEM_SEMANTIC_INJECT_LIMIT || '5';
       const semanticResult = await dependencies.executeWithWorkerFallback<SemanticContextResponse>(
         '/api/context/semantic',

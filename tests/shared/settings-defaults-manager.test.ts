@@ -444,7 +444,7 @@ describe('SettingsDefaultsManager', () => {
         const result = SettingsDefaultsManager.loadFromFile(settingsPath);
 
         expect(result.CLAUDE_MEM_MODEL).toBe('known-model');
-        expect((result as Record<string, unknown>).UNKNOWN_KEY).toBeUndefined();
+        expect(Object.keys(result)).not.toContain('UNKNOWN_KEY');
       });
 
       it('should handle file with BOM', () => {

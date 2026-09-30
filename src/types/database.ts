@@ -32,9 +32,19 @@ export interface ObservationRecord {
   created_at: string;
   created_at_epoch: number;
   title?: string;
-  concept?: string;
   prompt_number?: number;
   discovery_tokens?: number;
+  // Added by the structured-observation migration as nullable columns. The four
+  // array columns hold a JSON-encoded string array, not a parsed array.
+  subtitle?: string | null;
+  narrative?: string | null;
+  facts?: string | null;
+  concepts?: string | null;
+  files_read?: string | null;
+  files_modified?: string | null;
+  // Added by the agent-attribution migration; null on rows written before it.
+  agent_type?: string | null;
+  agent_id?: string | null;
 }
 
 export interface SessionSummaryRecord {
@@ -62,6 +72,21 @@ export interface UserPromptRecord {
   platform_source?: string;
   created_at: string;
   created_at_epoch: number;
+}
+
+export interface SdkSessionRecord {
+  id: number;
+  content_session_id: string;
+  memory_session_id: string;
+  project: string;
+  platform_source: string;
+  user_prompt: string;
+  custom_title: string | null;
+  started_at: string;
+  started_at_epoch: number;
+  completed_at: string | null;
+  completed_at_epoch: number | null;
+  status: string;
 }
 
 export interface LatestPromptResult {

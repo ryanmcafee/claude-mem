@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'bun:test';
 import express from 'express';
 import { isAcceptableRequestId, requestIdMiddleware } from '../../../src/server/middleware/request-id.js';
+import { expectDefined } from '../../helpers/expect-defined.js';
 
 describe('Phase 12 — request_id middleware', () => {
   it('mints a request id when none is provided', async () => {
@@ -15,10 +16,10 @@ describe('Phase 12 — request_id middleware', () => {
     try {
       const port = (server.address() as { port: number }).port;
       const resp = await fetch(`http://127.0.0.1:${port}/echo`);
-      expect(resp.headers.get('x-request-id')).toBeTruthy();
+      const headerId = expectDefined(resp.headers.get('x-request-id'), 'the x-request-id header');
       const body = await resp.json() as { id: string };
       expect(body.id.length).toBeGreaterThan(0);
-      expect(body.id).toBe(resp.headers.get('x-request-id'));
+      expect(body.id).toBe(headerId);
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
