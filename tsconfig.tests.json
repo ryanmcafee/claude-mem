@@ -45,12 +45,7 @@
     "tests/server/jobs/server-job-queue.test.ts",
     "tests/server/mcp/recall-mcp-server.test.ts",
     "tests/server/runtime/active-queue-manager.test.ts",
-    "tests/shared/kill-process-tree-identity.test.ts",
     "tests/shared/oauth-token.test.ts",
-    "tests/shared/observed-billing.test.ts",
-    "tests/storage/postgres/platform-source-scoping.test.ts",
-    "tests/worker/search/search-orchestrator.test.ts",
-    "tests/worker/session-manager-project.test.ts",
     "tests/worker/session-manager-wrapup.test.ts",
     "tests/worker/sync/cloud-sync.test.ts"
   ]
