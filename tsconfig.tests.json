@@ -37,7 +37,6 @@
     "tests/infrastructure/cleanup-v12_4_3.test.ts",
     "tests/install-error-matrix.test.ts",
     "tests/integrations/telegram-wrapup-notifier.test.ts",
-    "tests/sdk/hardened-options-thinking.test.ts",
     "tests/security/observer-tool-enforcement.test.ts",
     // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
     // real Worker. Needs the ServerJobQueue test seam narrowed to what the
