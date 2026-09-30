@@ -12,14 +12,14 @@ describe('buildHardenedSdkOptions thinking policy', () => {
 
   it('disables thinking for Observer sessions', () => {
     const opts = build('Observer');
-    expect(opts.thinkingConfig).toEqual({ type: 'disabled' });
-    expect(opts.thinkingConfig?.type).toBe('disabled');
+    expect(opts.thinking).toEqual({ type: 'disabled' });
+    expect('thinkingConfig' in opts).toBe(false);
   });
 
-  it('does not set thinkingConfig for KnowledgeAgent sessions', () => {
+  it('does not set thinking for KnowledgeAgent sessions', () => {
     const opts = build('KnowledgeAgent');
-    expect('thinkingConfig' in opts).toBe(false);
-    expect(opts.thinkingConfig).toBeUndefined();
+    expect('thinking' in opts).toBe(false);
+    expect(opts.thinking).toBeUndefined();
   });
 
   it('keeps lockdown fields unchanged for both sources', () => {
