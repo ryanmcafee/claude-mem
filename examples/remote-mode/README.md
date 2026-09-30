@@ -69,6 +69,28 @@ curl -sS -X POST "$CLAUDE_MEM_SERVER_URL/v1/memories" \
   -d '{"projectId":"homelab","content":"Rollbacks use the previous ArgoCD revision.","shared":true}'
 ```
 
+### What a shared read gives you, and what it does not
+
+`shared` publishes content, not provenance. A row you reach through the shared
+scope but do not own comes back as `id`, `kind`, `content`, `shared`, the
+timestamps, and `sharedOrigin` — a stable opaque token you can group results by.
+`teamId`, `projectId`, `serverSessionId` and `metadata` are omitted, because
+`projects.id` is caller-supplied text (usually a repository or directory name)
+and `metadata` is publisher-controlled JSON that the write path stamps with the
+publishing agent's id. Reading your own rows is unaffected.
+
+`scope: "shared"` is server-global, not project-relative. The project predicate
+constrains only your own tenant's branch of the query, so a project-scoped key
+asking for the shared scope also sees shared rows published outside its project
+scope — including your own team's other projects. Those out-of-project rows get
+the same redacted projection as another tenant's, so the scope widens what you
+can read without widening what you learn about where it came from.
+
+`CLAUDE_MEM_INCLUDE_SHARED` is a per-process default, not a per-query flag: it
+makes every read from that client (or pod) default to the shared scope. Leave it
+unset unless the whole process should read shared knowledge, and prefer passing
+`scope` on the individual call.
+
 ## API surface
 
 | Endpoint | Purpose |
