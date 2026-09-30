@@ -30,7 +30,6 @@
     "tests/**/*.spec.js",
     // Covered by `tsconfig.viewer-tests.json`, which carries the DOM lib.
     "tests/viewer",
-    "tests/security/observer-tool-enforcement.test.ts",
     // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
     // real Worker. Needs the ServerJobQueue test seam narrowed to what the
     // class calls, which BullMQ's unresolved generics block -- tracked in MCAA-432.
