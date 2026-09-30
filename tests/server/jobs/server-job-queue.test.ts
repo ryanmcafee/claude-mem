@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import type { Job, Processor, QueueOptions, WorkerOptions } from 'bullmq';
-import { ServerJobQueue } from '../../../src/server/jobs/ServerJobQueue.js';
+import type { QueueOptions, WorkerOptions } from 'bullmq';
+import { ServerJobQueue, type ServerJobWorkerEvents } from '../../../src/server/jobs/ServerJobQueue.js';
 import type { RedisQueueConfig } from '../../../src/server/queue/redis-config.js';
+import { expectDefined } from '../../helpers/expect-defined.js';
 
 const fakeConfig: RedisQueueConfig = {
   engine: 'bullmq',
@@ -19,20 +20,22 @@ interface FakeQueueState {
   closed: boolean;
 }
 
-interface FakeWorkerState {
-  processor: Processor<unknown> | null;
+interface FakeWorkerState<TPayload> {
   options: WorkerOptions | null;
-  errorHandlers: Array<(error: unknown) => void>;
+  listeners: Partial<ServerJobWorkerEvents<TPayload>>;
   ranWith: 'autorun-false' | 'autorun-true' | null;
   closed: boolean;
-  eventHandlers?: Map<string, (...args: unknown[]) => void>;
+}
+
+function newWorkerState<TPayload>(): FakeWorkerState<TPayload> {
+  return { options: null, listeners: {}, ranWith: null, closed: false };
 }
 
 function buildFakeQueue(state: FakeQueueState) {
   return (_name: string, _options: QueueOptions) => ({
     add: async (name: string, payload: unknown, opts?: { jobId?: string }) => {
       state.added.push({ name, payload, jobId: opts?.jobId });
-      return { id: opts?.jobId ?? 'job_anon' } as Job<unknown>;
+      return { id: opts?.jobId ?? 'job_anon' };
     },
     getJob: async (_id: string) => null,
     getJobCounts: async (..._states: string[]) => ({
@@ -51,19 +54,12 @@ function buildFakeQueue(state: FakeQueueState) {
   });
 }
 
-function buildFakeWorker(state: FakeWorkerState) {
-  return (_name: string, processor: Processor<unknown> | null, options: WorkerOptions) => {
-    state.processor = processor;
+function buildFakeWorker<TPayload>(state: FakeWorkerState<TPayload>) {
+  return (_name: string, _processor: unknown, options: WorkerOptions) => {
     state.options = options;
     return {
-      on: (event: string, handler: (...args: unknown[]) => void) => {
-        if (event === 'error') {
-          state.errorHandlers.push(handler as (error: unknown) => void);
-        }
-        // Phase 12 — capture all lifecycle handlers on the fake worker so
-        // tests can fire completed/failed/stalled events synchronously.
-        const ev = state.eventHandlers ?? (state.eventHandlers = new Map());
-        ev.set(event, handler);
+      on: <E extends keyof ServerJobWorkerEvents<TPayload>>(event: E, listener: ServerJobWorkerEvents<TPayload>[E]) => {
+        state.listeners[event] = listener;
       },
       run: () => {
         state.ranWith = options.autorun === false ? 'autorun-false' : 'autorun-true';
@@ -108,13 +104,7 @@ describe('ServerJobQueue', () => {
 
   it('starts the worker with autorun: false and attaches an error listener', () => {
     const queueState: FakeQueueState = { added: [], removed: [], closed: false };
-    const workerState: FakeWorkerState = {
-      processor: null,
-      options: null,
-      errorHandlers: [],
-      ranWith: null,
-      closed: false
-    };
+    const workerState = newWorkerState<{ x: number }>();
     const sjq = new ServerJobQueue<{ x: number }>({
       name: 'q',
       config: fakeConfig,
@@ -125,20 +115,14 @@ describe('ServerJobQueue', () => {
 
     expect(workerState.options?.autorun).toBe(false);
     expect(workerState.options?.concurrency).toBe(1);
-    expect(workerState.errorHandlers.length).toBeGreaterThanOrEqual(1);
+    expect(workerState.listeners.error).toBeFunction();
     expect(workerState.ranWith).toBe('autorun-false');
     expect(sjq.isStarted()).toBe(true);
   });
 
   it('refuses double-start to avoid duplicate Worker instances', () => {
     const queueState: FakeQueueState = { added: [], removed: [], closed: false };
-    const workerState: FakeWorkerState = {
-      processor: null,
-      options: null,
-      errorHandlers: [],
-      ranWith: null,
-      closed: false
-    };
+    const workerState = newWorkerState<{ x: number }>();
     const sjq = new ServerJobQueue<{ x: number }>({
       name: 'q',
       config: fakeConfig,
@@ -151,13 +135,7 @@ describe('ServerJobQueue', () => {
 
   it('error listener absorbs worker errors without throwing', () => {
     const queueState: FakeQueueState = { added: [], removed: [], closed: false };
-    const workerState: FakeWorkerState = {
-      processor: null,
-      options: null,
-      errorHandlers: [],
-      ranWith: null,
-      closed: false
-    };
+    const workerState = newWorkerState<{ x: number }>();
     const sjq = new ServerJobQueue<{ x: number }>({
       name: 'q',
       config: fakeConfig,
@@ -166,16 +144,14 @@ describe('ServerJobQueue', () => {
     });
     sjq.start(async () => {});
     expect(() =>
-      workerState.errorHandlers[0]!(new Error('worker crashed'))
+      expectDefined(workerState.listeners.error, 'error listener')(new Error('worker crashed'))
     ).not.toThrow();
   });
 
   it('Phase 12 — emits completed/failed/stalled lifecycle events through observe()', () => {
     const queueState: FakeQueueState = { added: [], removed: [], closed: false };
-    const workerState: FakeWorkerState = {
-      processor: null, options: null, errorHandlers: [], ranWith: null, closed: false,
-    };
-    const sjq = new ServerJobQueue<{ x: number }>({
+    const workerState = newWorkerState<{ source_type: string }>();
+    const sjq = new ServerJobQueue<{ source_type: string }>({
       name: 'q', config: fakeConfig,
       queueFactory: buildFakeQueue(queueState),
       workerFactory: buildFakeWorker(workerState),
@@ -191,11 +167,15 @@ describe('ServerJobQueue', () => {
     sjq.start(async () => {});
 
     // Fire a fake "active" then "completed" so duration is positive.
-    workerState.eventHandlers?.get('active')?.({ id: 'job1' });
-    workerState.eventHandlers?.get('completed')?.({ id: 'job1', data: { source_type: 'agent_event' } }, { ok: true });
-    workerState.eventHandlers?.get('failed')?.({ id: 'job2', data: { source_type: 'agent_event' }, attemptsMade: 2 }, new Error('boom'));
-    workerState.eventHandlers?.get('stalled')?.('job3');
-    workerState.errorHandlers[0]!(new Error('worker err'));
+    const { listeners } = workerState;
+    expectDefined(listeners.active, 'active listener')({ id: 'job1' });
+    expectDefined(listeners.completed, 'completed listener')({ id: 'job1', data: { source_type: 'agent_event' } }, { ok: true });
+    expectDefined(listeners.failed, 'failed listener')(
+      { id: 'job2', data: { source_type: 'agent_event' }, attemptsMade: 2 },
+      new Error('boom'),
+    );
+    expectDefined(listeners.stalled, 'stalled listener')('job3');
+    expectDefined(listeners.error, 'error listener')(new Error('worker err'));
 
     expect(events.find(e => e.kind === 'completed')?.jobId).toBe('job1');
     expect(events.find(e => e.kind === 'failed')?.jobId).toBe('job2');
@@ -209,13 +189,7 @@ describe('ServerJobQueue', () => {
 
   it('closes worker and queue on close()', async () => {
     const queueState: FakeQueueState = { added: [], removed: [], closed: false };
-    const workerState: FakeWorkerState = {
-      processor: null,
-      options: null,
-      errorHandlers: [],
-      ranWith: null,
-      closed: false
-    };
+    const workerState = newWorkerState<{ x: number }>();
     const sjq = new ServerJobQueue<{ x: number }>({
       name: 'q',
       config: fakeConfig,

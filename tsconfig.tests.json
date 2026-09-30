@@ -1,9 +1,7 @@
 // Type-checks test sources, which `tsconfig.json` excludes entirely.
 //
-// `exclude` is a staged backlog, not a suppression: every entry is a suite that
-// does not type-check yet on `main`. Delete an entry once its errors are fixed
-// at the source -- the list only ever shrinks, and new test files are checked
-// by default because `include` is a glob.
+// Every suite is checked. Fix a type error at its source; never add a suite to
+// `exclude`, which holds only build output and the DOM-lib viewer suites.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -29,10 +27,6 @@
     "tests/**/*.test.js",
     "tests/**/*.spec.js",
     // Covered by `tsconfig.viewer-tests.json`, which carries the DOM lib.
-    "tests/viewer",
-    // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
-    // real Worker. Needs the ServerJobQueue test seam narrowed to what the
-    // class calls, which BullMQ's unresolved generics block -- tracked in MCAA-432.
-    "tests/server/jobs/server-job-queue.test.ts"
+    "tests/viewer"
   ]
 }
