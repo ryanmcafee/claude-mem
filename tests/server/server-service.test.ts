@@ -11,6 +11,32 @@ import {
   createPostgresStorageRepositories,
 } from '../../src/storage/postgres/index.js';
 import { logger } from '../../src/utils/logger.js';
+import { readJson } from '../helpers/http-json.js';
+
+interface ServerHealthResponse {
+  runtime: string;
+}
+
+interface ServerInfoResponse {
+  runtime: string;
+  boundaries: { queueManager: { status: string } };
+}
+
+interface EventRowBody {
+  id: string;
+  projectId: string;
+  teamId: string;
+}
+
+interface EventCreatedResponse {
+  event: EventRowBody;
+  generationJob: { id: string; sourceType: string; sourceId: string; transport: string };
+}
+
+interface EventCreatedWithoutJobResponse {
+  event: EventRowBody;
+  generationJob?: undefined;
+}
 
 const loggerSpies: ReturnType<typeof spyOn>[] = [];
 const TEST_DATABASE_URL = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
@@ -46,11 +72,11 @@ describe('ServerService', () => {
 
     const health = await fetch(`http://127.0.0.1:${address.port}/api/health`);
     expect(health.status).toBe(200);
-    expect((await health.json()).runtime).toBe('server-beta');
+    expect((await readJson<ServerHealthResponse>(health)).runtime).toBe('server-beta');
 
     const info = await fetch(`http://127.0.0.1:${address.port}/v1/info`);
     expect(info.status).toBe(200);
-    const body = await info.json();
+    const body = await readJson<ServerInfoResponse>(info);
     expect(body.runtime).toBe('server-beta');
     expect(body.boundaries.queueManager.status).toBe('disabled');
   });
@@ -112,7 +138,7 @@ describe('ServerService', () => {
           }),
         });
         expect(response.status).toBe(201);
-        const body = await response.json();
+        const body = await readJson<EventCreatedResponse>(response);
         expect(body.event.projectId).toBe(project.id);
         expect(body.event.teamId).toBe(team.id);
         expect(body.generationJob).toBeDefined();
@@ -174,7 +200,7 @@ describe('ServerService', () => {
           }),
         });
         expect(response.status).toBe(201);
-        const body = await response.json();
+        const body = await readJson<EventCreatedWithoutJobResponse>(response);
         expect(body.event).toBeDefined();
         expect(body.generationJob).toBeUndefined();
 

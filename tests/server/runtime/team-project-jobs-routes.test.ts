@@ -12,9 +12,17 @@ import {
 } from '../../../src/storage/postgres/index.js';
 import { DisabledServerQueueManager } from '../../../src/server/runtime/types.js';
 import { logger } from '../../../src/utils/logger.js';
+import { readJson } from '../../helpers/http-json.js';
 import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
+
+interface JobListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  jobs: { teamId: string; projectId: string; status: string }[];
+}
 
 describe('Phase 11 — team/project queue listing endpoints', () => {
   if (!testDatabaseUrl) {
@@ -170,11 +178,11 @@ describe('Phase 11 — team/project queue listing endpoints', () => {
   it('GET /v1/teams/:id/jobs returns ALL jobs for the team when called by team-scoped key', async () => {
     const resp = await authedFetch(teamAKey, `/v1/teams/${teamAId}/jobs`);
     expect(resp.status).toBe(200);
-    const body = await resp.json();
+    const body = await readJson<JobListResponse>(resp);
     // 2 jobs in projectA1 + 1 job in projectA2 = 3
     expect(body.total).toBe(3);
     expect(body.jobs.length).toBe(3);
-    expect(body.jobs.every((j: any) => j.teamId === teamAId)).toBe(true);
+    expect(body.jobs.every(j => j.teamId === teamAId)).toBe(true);
   });
 
   it('GET /v1/teams/:id/jobs returns 404 when caller is from a different team', async () => {
@@ -185,9 +193,9 @@ describe('Phase 11 — team/project queue listing endpoints', () => {
   it('GET /v1/teams/:id/jobs filters to project scope when caller is project-scoped', async () => {
     const resp = await authedFetch(projectA1Key, `/v1/teams/${teamAId}/jobs`);
     expect(resp.status).toBe(200);
-    const body = await resp.json();
+    const body = await readJson<JobListResponse>(resp);
     expect(body.total).toBe(2);
-    expect(body.jobs.every((j: any) => j.projectId === projectA1Id)).toBe(true);
+    expect(body.jobs.every(j => j.projectId === projectA1Id)).toBe(true);
   });
 
   it('GET /v1/projects/:id/jobs returns 404 when project belongs to another team', async () => {
@@ -203,28 +211,28 @@ describe('Phase 11 — team/project queue listing endpoints', () => {
   it('GET /v1/projects/:id/jobs allows project-scoped key to read its own project', async () => {
     const resp = await authedFetch(projectA1Key, `/v1/projects/${projectA1Id}/jobs`);
     expect(resp.status).toBe(200);
-    const body = await resp.json();
+    const body = await readJson<JobListResponse>(resp);
     expect(body.total).toBe(2);
-    expect(body.jobs.every((j: any) => j.projectId === projectA1Id)).toBe(true);
+    expect(body.jobs.every(j => j.projectId === projectA1Id)).toBe(true);
   });
 
   it('GET /v1/projects/:id/jobs allows team-scoped key to read any project under its team', async () => {
     const resp = await authedFetch(teamAKey, `/v1/projects/${projectA2Id}/jobs`);
     expect(resp.status).toBe(200);
-    const body = await resp.json();
+    const body = await readJson<JobListResponse>(resp);
     expect(body.total).toBe(1);
-    expect(body.jobs.every((j: any) => j.projectId === projectA2Id)).toBe(true);
+    expect(body.jobs.every(j => j.projectId === projectA2Id)).toBe(true);
   });
 
   it('supports status filter, limit, and offset', async () => {
     const resp = await authedFetch(teamAKey, `/v1/teams/${teamAId}/jobs?status=queued&limit=2&offset=0`);
     expect(resp.status).toBe(200);
-    const body = await resp.json();
+    const body = await readJson<JobListResponse>(resp);
     expect(body.total).toBe(3);
     expect(body.jobs.length).toBe(2);
     expect(body.limit).toBe(2);
     expect(body.offset).toBe(0);
-    expect(body.jobs.every((j: any) => j.status === 'queued')).toBe(true);
+    expect(body.jobs.every(j => j.status === 'queued')).toBe(true);
   });
 
   it('rejects unauthenticated requests', async () => {

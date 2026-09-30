@@ -6,6 +6,7 @@ import {
   buildObservationGenerationKey,
   createPostgresStorageRepositories,
   type PostgresPoolClient,
+  type PostgresQueryable,
   type PostgresStorageRepositories
 } from '../../../src/storage/postgres/index.js';
 import { quoteIdentifier } from '../../sdk/pg-isolation.js';
@@ -64,10 +65,10 @@ describe('server beta postgres schema bootstrap', () => {
 
   it('bootstraps platform-scoped server session identity indexes', async () => {
     const queries: string[] = [];
-    const client = {
+    const client: PostgresQueryable = {
       async query(text: string) {
         queries.push(text);
-        return { rows: [], rowCount: 0 };
+        return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] };
       }
     };
 
