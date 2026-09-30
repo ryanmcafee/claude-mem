@@ -684,22 +684,22 @@ describe('CloudSync', () => {
   });
 
   it('surfaces Hub authentication, network, and malformed-status failures without leaking the token', async () => {
-    const scenarios: Array<{ response: Response | Error; error: RegExp }> = [
+    const scenarios: Array<{ respond: () => Response; error: RegExp }> = [
       {
-        response: new Response('denied test-token-1234', { status: 401 }),
+        respond: () => new Response('denied test-token-1234', { status: 401 }),
         error: /sync hub status 401: denied \[REDACTED\]/,
       },
-      { response: new Error('connect ECONNREFUSED'), error: /ECONNREFUSED/ },
       {
-        response: Response.json({ protocol_version: 2, epoch: '1', head_seq: '2', projected_seq: '3' }),
+        respond: () => { throw new Error('connect ECONNREFUSED'); },
+        error: /ECONNREFUSED/,
+      },
+      {
+        respond: () => Response.json({ protocol_version: 2, epoch: '1', head_seq: '2', projected_seq: '3' }),
         error: /projected_seq exceeds head_seq/,
       },
     ];
     for (const scenario of scenarios) {
-      const impl = mockFetch(async () => {
-        if (scenario.response instanceof Error) throw scenario.response;
-        return scenario.response.clone();
-      });
+      const impl = mockFetch(async () => scenario.respond());
       const sync = makeCloudSync(impl);
       const status = await sync.statusWithHubProbe();
       expect(status.hub).toMatchObject({
@@ -1478,10 +1478,10 @@ describe('CloudSync', () => {
 
     it('preserves a mutation outbox entry when its own 200 ack has a wrong hash', async () => {
       store.createSDKSession('bad-mutation-ack', 'proj-x', 'prompt', 'title', 'claude');
-      let atResponse: unknown;
+      const durabilityAtResponse: Array<Record<string, unknown>> = [];
       const impl = mockFetch(async (_input: any, init?: any) => {
         const parsed = JSON.parse(String(init?.body));
-        atResponse = ackDurabilityState();
+        durabilityAtResponse.push(ackDurabilityState());
         const ack = canonicalAck(parsed.ops[0], 1);
         return canonicalSuccess([{ ...ack, operation_sha256: 'A'.repeat(43) }], 1);
       });
@@ -1492,7 +1492,8 @@ describe('CloudSync', () => {
       await sync.flush();
 
       expect(sync.status().lastError).toMatch(/extra or mismatched/);
-      expect(ackDurabilityState()).toEqual(atResponse);
+      expect(durabilityAtResponse).toHaveLength(1);
+      expect(ackDurabilityState()).toEqual(durabilityAtResponse[0]);
       expect(outboxRows()).toHaveLength(1);
       expect(seenHeads).toEqual([]);
       sync.stop();
