@@ -36,7 +36,7 @@ const CANONICAL_IDES = [
 
 describe('error taxonomy', () => {
   it('exposes ErrorSeverity, ERROR_CATEGORIES, classifyError', () => {
-    expect(ErrorSeverity.ABORT).toBe('ABORT');
+    expect<string>(ErrorSeverity.ABORT).toBe('ABORT');
     expect(Array.isArray(ERROR_CATEGORIES)).toBe(true);
     expect(ERROR_CATEGORIES.length).toBeGreaterThanOrEqual(12);
   });

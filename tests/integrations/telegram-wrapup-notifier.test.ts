@@ -13,7 +13,8 @@ import {
   loadTelegramWrapupConfig,
   resolveWrapupRoute,
 } from '../../src/services/integrations/TelegramWrapupNotifier.js';
-import { mockFetch } from '../helpers/fetch-mock';
+import { mockFetch, type FetchMock } from '../helpers/fetch-mock';
+import { expectDefined } from '../helpers/expect-defined';
 
 describe('Telegram wrap-up notifier', () => {
   let store: SessionStore;
@@ -68,10 +69,8 @@ describe('Telegram wrap-up notifier', () => {
     }, 3);
   }
 
-  function successfulFetch(): typeof fetch {
-    return mock((_url: string | URL | Request, _init?: RequestInit) => (
-      Promise.resolve(new Response('', { status: 200 }))
-    )) as unknown as typeof fetch;
+  function successfulFetch(): FetchMock {
+    return mockFetch(() => Promise.resolve(new Response('', { status: 200 })));
   }
 
   it('uses only the exact formatting instruction and the unabridged summary', () => {
@@ -208,7 +207,7 @@ describe('Telegram wrap-up notifier', () => {
       }],
       usage: { prompt_tokens: 120, completion_tokens: 20, total_tokens: 140 },
     }), { status: 200 }));
-    globalThis.fetch = inferenceFetch as unknown as typeof fetch;
+    globalThis.fetch = inferenceFetch;
     const provider = new OpenRouterProvider({} as never, {} as never);
     const telegramFetch = successfulFetch();
 
@@ -218,9 +217,9 @@ describe('Telegram wrap-up notifier', () => {
     })).resolves.toBe('sent');
 
     expect(inferenceFetch).toHaveBeenCalledTimes(1);
-    const [url, request] = inferenceFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, request] = expectDefined(inferenceFetch.mock.calls[0], 'inference request');
     expect(url).toBe('https://cmem.ai/api/inference/v1/chat/completions');
-    const body = JSON.parse(String(request.body));
+    const body = JSON.parse(String(request?.body));
     expect(body.model).toBe('cmem-observer');
     expect(body.max_tokens).toBe(4096);
     expect(body.response_format).toEqual({ type: 'text' });
@@ -324,9 +323,9 @@ describe('Telegram wrap-up notifier', () => {
     })).resolves.toBe('already_sent');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = expectDefined(fetchMock.mock.calls[0], 'telegram request');
     expect(url).toBe('https://api.telegram.org/botroute-token/sendMessage');
-    const body = JSON.parse(String(init.body)) as { chat_id: string; text: string };
+    const body = JSON.parse(String(init?.body));
     expect(body.chat_id).toBe('route-chat');
     expect(body.text).toBe('• Shipped the wrap\\-up');
     expect(formatSummary).toHaveBeenCalledTimes(1);

@@ -6,6 +6,7 @@ import type {
   ServerGenerationJobPayload,
 } from '../../../src/server/jobs/types.js';
 import type { RedisQueueConfig } from '../../../src/server/queue/redis-config.js';
+import { expectDefined } from '../../helpers/expect-defined.js';
 
 const bullmqConfig: RedisQueueConfig = {
   engine: 'bullmq',
@@ -68,8 +69,8 @@ describe('ActiveServerQueueManager', () => {
   it('exposes per-kind queues via getQueue', () => {
     const { queues } = buildStubQueues();
     const manager = new ActiveServerQueueManager(bullmqConfig, queues);
-    expect(manager.getQueue('event')).toBe(queues.get('event'));
-    expect(manager.getQueue('summary')).toBe(queues.get('summary'));
+    expect(manager.getQueue('event')).toBe(expectDefined(queues.get('event'), 'event queue'));
+    expect(manager.getQueue('summary')).toBe(expectDefined(queues.get('summary'), 'summary queue'));
   });
 
   it('closes every queue on close() and reports errored health afterwards', async () => {

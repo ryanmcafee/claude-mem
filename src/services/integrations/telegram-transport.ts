@@ -1,3 +1,5 @@
+import type { FetchLike } from '../../shared/fetch-like.js';
+
 const MARKDOWN_V2_RESERVED = /[_*\[\]()~`>#+\-=|{}.!\\]/g;
 
 export function escapeMarkdownV2(value: string): string {
@@ -8,7 +10,7 @@ export async function postTelegramMessage(
   botToken: string,
   chatId: string,
   text: string,
-  fetchImpl: typeof fetch = globalThis.fetch,
+  fetchImpl: FetchLike = globalThis.fetch,
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const response = await fetchImpl(url, {

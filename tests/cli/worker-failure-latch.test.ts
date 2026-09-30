@@ -23,7 +23,7 @@ function createStateDir(state: PersistedFailureState): string {
   return dataDir;
 }
 
-function readState(dataDir: string): Required<PersistedFailureState> {
+function readState(dataDir: string): PersistedFailureState {
   return JSON.parse(readFileSync(join(dataDir, 'state', 'hook-failures.json'), 'utf-8'));
 }
 
