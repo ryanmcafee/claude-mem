@@ -3,6 +3,7 @@ import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { SessionStore } from '../sqlite/SessionStore.js';
 import { logger } from '../../utils/logger.js';
 import { escapeMarkdownV2, postTelegramMessage } from './telegram-transport.js';
+import type { FetchLike } from '../../shared/fetch-like.js';
 
 export const TELEGRAM_WRAPUP_PROMPT = 'format as a very short bulleted list that narratively explains this summary in < 255 char';
 
@@ -43,7 +44,7 @@ export interface WrapupDeliveryInput {
   sessionDbId: number;
   formatSummary: TelegramWrapupFormatter;
   settings?: SettingsDefaults;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
 }
 
 function isRouteMap(value: unknown): value is Record<string, unknown> {
