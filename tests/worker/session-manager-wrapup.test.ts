@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
 
 import * as realTelegramWrapupNotifier from '../../src/services/integrations/TelegramWrapupNotifier.js';
 import * as realProcessRegistry from '../../src/supervisor/process-registry.js';
@@ -59,9 +59,19 @@ function makeManager(): SessionManager {
 }
 
 let scheduledCallback: (() => void) | undefined;
-let timerHandle: { unref: ReturnType<typeof mock> };
-let setTimeoutSpy: ReturnType<typeof spyOn>;
-let clearTimeoutSpy: ReturnType<typeof spyOn>;
+let timerHandle: NodeJS.Timeout;
+let unrefSpy: Mock<NodeJS.Timeout['unref']>;
+let setTimeoutSpy: Mock<typeof setTimeout>;
+let clearTimeoutSpy: Mock<typeof clearTimeout>;
+
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+
+function inertTimeout(): NodeJS.Timeout {
+  const handle = realSetTimeout(() => {}, 0);
+  realClearTimeout(handle);
+  return handle;
+}
 let warnSpy: ReturnType<typeof spyOn>;
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
 
@@ -74,11 +84,15 @@ beforeEach(() => {
   reapSession.mockClear();
   reapSession.mockImplementation(async () => 0);
   scheduledCallback = undefined;
-  timerHandle = { unref: mock(() => {}) };
-  setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation((callback: TimerHandler) => {
-    scheduledCallback = callback as () => void;
-    return timerHandle as unknown as ReturnType<typeof setTimeout>;
-  });
+  timerHandle = inertTimeout();
+  unrefSpy = spyOn(timerHandle, 'unref');
+  setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(Object.assign(
+    <TArgs extends unknown[]>(callback: (...args: TArgs) => void, _delay?: number, ...args: TArgs) => {
+      scheduledCallback = () => callback(...args);
+      return timerHandle;
+    },
+    { __promisify__: realSetTimeout.__promisify__ },
+  ));
   clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
   warnSpy = spyOn(logger, 'warn').mockImplementation(() => {});
   loggerSpies = [
@@ -140,7 +154,7 @@ describe('SessionManager SessionEnd wrap-up requests', () => {
     expect(session.telegramWrapupRequestedAt).toEqual(expect.any(Number));
     expect(session.telegramWrapupTimer).toBe(timerHandle);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), SESSION_END_WRAPUP_GRACE_MS);
-    expect(timerHandle.unref).toHaveBeenCalledTimes(1);
+    expect(unrefSpy).toHaveBeenCalledTimes(1);
     expect(deliverSessionWrapup).not.toHaveBeenCalled();
   });
 

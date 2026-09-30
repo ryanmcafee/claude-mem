@@ -22,7 +22,7 @@ describe('sessionInitHandler plugin cache self-capture guard', () => {
     setSessionInitDependenciesForTesting({
       executeWithWorkerFallback: async (apiPath, method, body) => {
         workerCalls.push({ apiPath, method, body });
-        return { sessionDbId: 42, promptNumber: 1 };
+        throw new Error(`plugin-cache cwd must not reach the worker: ${method} ${apiPath}`);
       },
     });
 

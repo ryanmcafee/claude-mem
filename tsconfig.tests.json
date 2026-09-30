@@ -31,16 +31,11 @@
     // Covered by `tsconfig.viewer-tests.json`, which carries the DOM lib.
     "tests/viewer",
     "tests/bun-runner.test.ts",
-    "tests/cli/handlers/session-init-plugin-cache-skip.test.ts",
-    "tests/infrastructure/cleanup-v12_4_3.test.ts",
     "tests/security/observer-tool-enforcement.test.ts",
     // The fakes cannot satisfy `Pick<Worker, 'on'>`, whose `on` must return a
     // real Worker. Needs the ServerJobQueue test seam narrowed to what the
     // class calls, which BullMQ's unresolved generics block -- tracked in MCAA-432.
     "tests/server/jobs/server-job-queue.test.ts",
-    "tests/server/mcp/recall-mcp-server.test.ts",
-    "tests/shared/oauth-token.test.ts",
-    "tests/worker/session-manager-wrapup.test.ts",
-    "tests/worker/sync/cloud-sync.test.ts"
+    "tests/server/mcp/recall-mcp-server.test.ts"
   ]
 }
