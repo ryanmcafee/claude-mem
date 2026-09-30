@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'bun:test';
 import { spawn } from 'child_process';
-import { collectDescendantIdentities } from '../../src/shared/kill-process-tree.js';
+import { collectDescendantIdentities, type DescendantIdentity } from '../../src/shared/kill-process-tree.js';
 import {
   captureProcessStartToken,
   isSameProcess,
@@ -49,7 +49,9 @@ describe('descendant enumeration agrees with captureProcessStartToken', () => {
 
     // At least one token must have been readable, or the comparison below is
     // vacuous — every entry would trivially "agree" via the null fallback.
-    const withTokens = descendants.filter(entry => entry.startToken !== null);
+    const withTokens = descendants.filter(
+      (entry): entry is DescendantIdentity & { startToken: string } => entry.startToken !== null,
+    );
     expect(withTokens.length).toBeGreaterThan(0);
 
     for (const entry of withTokens) {
