@@ -21,6 +21,13 @@ import { logger } from '../utils/logger.js';
 
 const execFileAsync = promisify(execFile);
 
+/** The one execFile call shape the keychain readers make; `execFileAsync` satisfies it. */
+export type KeychainExec = (
+  file: string,
+  args: readonly string[],
+  options: { timeout: number; windowsHide: boolean },
+) => Promise<{ stdout: string }>;
+
 const KEYCHAIN_SERVICE_NAME = 'Claude Code-credentials';
 const READ_TIMEOUT_MS = 5000;
 
@@ -180,7 +187,7 @@ function isExpired(expiresAtMs: number | undefined): boolean {
  */
 export async function readMacOsKeychain(
   serviceName: string,
-  execImpl: typeof execFileAsync = execFileAsync,
+  execImpl: KeychainExec = execFileAsync,
   username: string = userInfo().username,
 ): Promise<OAuthTokenResult> {
   const account = sanitizeMacOsKeychainAccount(username);
@@ -442,7 +449,7 @@ function readSidecarExpiresAt(): number | undefined {
  * call site (only src/shared/EnvManager.ts calls this today, with no args).
  */
 export async function readClaudeOAuthToken(
-  execImpl: typeof execFileAsync = execFileAsync,
+  execImpl: KeychainExec = execFileAsync,
 ): Promise<OAuthTokenResult> {
   let keychainResult: OAuthTokenResult;
 

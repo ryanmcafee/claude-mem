@@ -1,6 +1,5 @@
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import * as fs from 'fs';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -173,21 +172,12 @@ describe('runOneTimeV12_4_3Cleanup', () => {
     const dbPath = path.join(tmpDataDir, 'claude-mem.db');
     seedDatabase(dbPath, { observerSessions: 2, stuckCount: 10 });
 
-    const statfsSpy = spyOn(fs, 'statfsSync').mockImplementation(() => ({
-      type: 0,
-      bsize: 0, // ← the bug: should be 4096 on APFS
-      blocks: 4096,
-      bfree: 1048576,
-      bavail: 977028249,
-      files: 0,
-      ffree: 0,
-    }) as unknown as ReturnType<typeof fs.statfsSync>);
-
-    try {
-      runOneTimeV12_4_3Cleanup(tmpDataDir);
-    } finally {
-      statfsSpy.mockRestore();
-    }
+    runOneTimeV12_4_3Cleanup(tmpDataDir, {
+      statfs: () => ({
+        bsize: 0, // ← the bug: should be 4096 on APFS
+        bavail: 977028249,
+      }),
+    });
 
     const markerPath = path.join(tmpDataDir, '.cleanup-v12.4.3-applied');
     expect(existsSync(markerPath)).toBe(true);
@@ -197,13 +187,7 @@ describe('runOneTimeV12_4_3Cleanup', () => {
     expect(payload.backupPath).toBeTruthy();
     expect(existsSync(payload.backupPath)).toBe(true);
 
-    // Guard against the spy silently failing to intercept the named ESM import
-    // inside CleanupV12_4_3.ts. If the production code is still calling the
-    // real statfsSync (which returns ~1 TB free on this machine), the cleanup
-    // still completes and every assertion above passes vacuously. The WARN
-    // log line is only emitted on the defensive branch, so asserting on it
-    // disambiguates "spy worked, defensive branch fired" from "spy silently
-    // bypassed, normal branch fired".
+    // The WARN fires only on the defensive branch, so it proves the injected reading was used.
     expect(logger.warn).toHaveBeenCalledWith(
       'SYSTEM',
       expect.stringContaining('non-credible'),
@@ -215,21 +199,9 @@ describe('runOneTimeV12_4_3Cleanup', () => {
     const dbPath = path.join(tmpDataDir, 'claude-mem.db');
     seedDatabase(dbPath, { observerSessions: 2, stuckCount: 10 });
 
-    const statfsSpy = spyOn(fs, 'statfsSync').mockImplementation(() => ({
-      type: 0,
-      bsize: 4096,
-      blocks: 4096,
-      bfree: 1048576,
-      bavail: -1,
-      files: 0,
-      ffree: 0,
-    }) as unknown as ReturnType<typeof fs.statfsSync>);
-
-    try {
-      runOneTimeV12_4_3Cleanup(tmpDataDir);
-    } finally {
-      statfsSpy.mockRestore();
-    }
+    runOneTimeV12_4_3Cleanup(tmpDataDir, {
+      statfs: () => ({ bsize: 4096, bavail: -1 }),
+    });
 
     const markerPath = path.join(tmpDataDir, '.cleanup-v12.4.3-applied');
     expect(existsSync(markerPath)).toBe(true);
