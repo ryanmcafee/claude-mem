@@ -20,7 +20,7 @@ const createFindBun = new Function(
   existsSync: (path: string) => boolean;
   homedir: () => string;
   join: typeof join;
-  spawnSync: typeof spawnSync;
+  spawnSync: (command: string, args: string[], options: object) => WhereResult;
 }) => FindBun;
 
 interface WhereResult {
@@ -82,11 +82,10 @@ function findBunForWhereOutput(stdout: string) {
     existsSync: () => false,
     homedir: () => 'C:\\Users\\fixture',
     join,
-    spawnSync: (() => ({
+    spawnSync: () => ({
       status: 0,
       stdout,
-      stderr: ''
-    })) as typeof spawnSync
+    })
   })();
 }
 
