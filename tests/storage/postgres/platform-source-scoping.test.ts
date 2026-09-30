@@ -233,8 +233,8 @@ describe('server-beta Postgres platform source scoping', () => {
     await repo.search({ projectId: 'project-1', teamId: 'team-1', query: 'auth bug' });
 
     expect(client.calls[0].text).toContain('OR ($6 AND observations.shared)');
-    expect(client.calls[0].values[5]).toBe(true);
-    expect(client.calls[1].values[5]).toBe(false);
-    expect(client.calls[2].values[5]).toBe(false);
+    expect(client.calls[0].values?.[5]).toBe(true);
+    expect(client.calls[1].values?.[5]).toBe(false);
+    expect(client.calls[2].values?.[5]).toBe(false);
   });
 });
