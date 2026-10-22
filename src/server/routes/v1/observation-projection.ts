@@ -13,8 +13,6 @@
 // REST /v1/context and the three MCP recall tools all read the same rows: a
 // per-route filter would leak from whichever surface someone forgot to update.
 
-import { createHash } from 'node:crypto';
-
 export interface SerializableObservation {
   id: string;
   projectId: string;
@@ -39,19 +37,6 @@ export interface ObservationViewer {
 // path injects the publisher's `agentId`. Admitting a key is a trust-boundary
 // change and needs the same review this projection got.
 const SHARED_METADATA_ALLOWLIST: readonly string[] = [];
-
-const ORIGIN_TOKEN_LENGTH = 16;
-
-// Stable opaque grouping token so a consumer can tell two projected rows came
-// from the same publisher without learning who. teamId is a UUID, so the digest
-// cannot be walked back by guessing repository or directory names the way a
-// digest of the project id alone could.
-function sharedOriginToken(teamId: string, projectId: string): string {
-  return createHash('sha256')
-    .update(`claude-mem:shared-origin:v1:${teamId}:${projectId}`)
-    .digest('hex')
-    .slice(0, ORIGIN_TOKEN_LENGTH);
-}
 
 function admittedSharedMetadata(
   metadata: Record<string, unknown>,
@@ -93,9 +78,9 @@ export function serializeObservation(observation: SerializableObservation): Reco
 
 /**
  * Serialize a row for `viewer`. Owned rows keep full fidelity; anything reached
- * through the shared branch is reduced to the published content plus an opaque
- * origin token. `teamId`, `projectId`, `serverSessionId` and `metadata` never
- * cross that boundary.
+ * through the shared branch is reduced to the published content with no
+ * publisher provenance. `teamId`, `projectId`, `serverSessionId` and `metadata`
+ * never cross that boundary.
  */
 export function serializeObservationForViewer(
   observation: SerializableObservation,
@@ -110,7 +95,6 @@ export function serializeObservationForViewer(
     kind: observation.kind,
     content: observation.content,
     shared: observation.shared === true,
-    sharedOrigin: sharedOriginToken(observation.teamId, observation.projectId),
     ...(metadata ? { metadata } : {}),
     createdAtEpoch: observation.createdAtEpoch,
     updatedAtEpoch: observation.updatedAtEpoch,

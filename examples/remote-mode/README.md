@@ -72,9 +72,9 @@ curl -sS -X POST "$CLAUDE_MEM_SERVER_URL/v1/memories" \
 ### What a shared read gives you, and what it does not
 
 `shared` publishes content, not provenance. A row you reach through the shared
-scope but do not own comes back as `id`, `kind`, `content`, `shared`, the
-timestamps, and `sharedOrigin` — a stable opaque token you can group results by.
-`teamId`, `projectId`, `serverSessionId` and `metadata` are omitted, because
+scope but do not own comes back as `id`, `kind`, `content`, `shared` and the
+timestamps, and nothing else: it carries no publisher provenance at all, not even
+an opaque token that would let you group results by publisher. `teamId`, `projectId`, `serverSessionId` and `metadata` are omitted, because
 `projects.id` is caller-supplied text (usually a repository or directory name)
 and `metadata` is publisher-controlled JSON that the write path stamps with the
 publishing agent's id. Reading your own rows is unaffected.

@@ -180,11 +180,10 @@ export interface ServerSearchObservationsRequest {
 
 // MCAA-281 — `projectId` is absent on a row reached through `scope: "shared"`
 // that the caller does not own: the server projects those down to the published
-// content plus `sharedOrigin`, an opaque grouping token. Declaring it required
-// would hand callers an `undefined` the compiler promised could not happen.
+// content with no publisher provenance. Declaring it required would hand
+// callers an `undefined` the compiler promised could not happen.
 export interface ServerSharedProjectedFields {
   projectId?: string;
-  sharedOrigin?: string;
 }
 
 export interface ServerSearchObservationsResponse {
