@@ -1,6 +1,12 @@
 import { describe, it, expect, afterAll } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'child_process';
-import { killProcessTree, collectDescendantIdentities } from '../../src/shared/kill-process-tree.js';
+import { readFileSync } from 'fs';
+import { basename } from 'path';
+import {
+  killProcessTree,
+  collectDescendantIdentities,
+  type DescendantIdentity,
+} from '../../src/shared/kill-process-tree.js';
 import { captureProcessStartToken } from '../../src/shared/process-identity.js';
 import { isPidAlive } from '../../src/supervisor/process-registry.js';
 
@@ -55,6 +61,64 @@ function spawnTwoLevelTree(): ChildProcess {
   return child;
 }
 
+/** The long-running leaf the fixture exists to orphan. */
+const payloadImage = isWindows ? 'ping.exe' : 'sleep';
+
+/** Lowercased image name for one PID, or null once it is gone. */
+function imageNameOf(pid: number): string | null {
+  try {
+    if (isWindows) {
+      const stdout = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+        windowsHide: true,
+        encoding: 'utf-8',
+      });
+      const match = stdout.match(/^"([^"]*)"/m);
+      return match ? match[1]!.toLowerCase() : null;
+    }
+    // /proc mirrors what readProcessTableLinux() walks; macOS has no /proc.
+    if (process.platform === 'linux') return readFileSync(`/proc/${pid}/comm`, 'utf-8').trim().toLowerCase();
+    return basename(execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf-8' }).trim()).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Enumerate through the production helper, then register every descendant for
+ * teardown so a test that only kills the root cannot leak the payload.
+ */
+async function enumerateDescendants(rootPid: number): Promise<DescendantIdentity[]> {
+  const descendants = await collectDescendantIdentities(rootPid);
+  for (const entry of descendants) strays.push(entry.pid);
+  return descendants;
+}
+
+/**
+ * The payload descendant, selected by image name.
+ *
+ * `DescendantIdentity` carries no image name and the walk is a post-order DFS
+ * over process-table row order, so index 0 is unspecified by construction. On
+ * Windows the `cmd.exe` root has two leaves — `conhost.exe` and `PING.EXE` —
+ * and empirically index 0 was the conhost, so `!isPidAlive(descendants[0])`
+ * asserted that a console host died while the `ping` this suite exists to
+ * catch could still be orphaned.
+ */
+function payloadPid(descendants: DescendantIdentity[]): number {
+  const census = descendants.map(entry => ({ pid: entry.pid, image: imageNameOf(entry.pid) }));
+  const match = census.find(entry => entry.image === payloadImage);
+  if (!match) {
+    const seen = census.map(entry => `${entry.pid}:${entry.image ?? 'gone'}`).join(', ');
+    throw new Error(`enumeration found no ${payloadImage} descendant; saw ${seen || '(none)'}`);
+  }
+  return match.pid;
+}
+
+/** PIDs from `pids` still alive after waiting up to `timeoutMs` for all to exit. */
+async function survivorsOf(pids: number[], timeoutMs = 20_000): Promise<number[]> {
+  await waitUntil(() => pids.every(pid => !isPidAlive(pid)), timeoutMs);
+  return pids.filter(pid => isPidAlive(pid));
+}
+
 afterAll(() => {
   for (const pid of strays) {
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
@@ -66,10 +130,11 @@ describe('killProcessTree end-to-end on this platform', () => {
     const root = spawnTwoLevelTree();
     await settle();
 
-    // On Windows this is the CIM read; on POSIX the ps/proc read. Either way
-    // it must actually see the child, or every guard downstream is inert.
-    const descendants = await collectDescendantIdentities(root.pid!);
-    expect(descendants.length).toBeGreaterThan(0);
+    // On Windows this is the CIM read; on POSIX the ps/proc read. Either way it
+    // must see the long-running payload, not merely something, or every guard
+    // downstream is inert on the process that actually holds the worker port.
+    const descendants = await enumerateDescendants(root.pid!);
+    expect(isPidAlive(payloadPid(descendants))).toBe(true);
 
     try { process.kill(root.pid!, 'SIGKILL'); } catch { /* fine */ }
   }, 60_000);
@@ -78,14 +143,15 @@ describe('killProcessTree end-to-end on this platform', () => {
     const root = spawnTwoLevelTree();
     await settle();
 
-    const descendants = await collectDescendantIdentities(root.pid!);
-    expect(descendants.length).toBeGreaterThan(0);
-    const childPid = descendants[0]!.pid;
+    const descendants = await enumerateDescendants(root.pid!);
+    const subtree = [root.pid!, ...descendants.map(entry => entry.pid)];
+    expect(subtree).toContain(payloadPid(descendants));
 
     await killProcessTree(root.pid!);
 
-    expect(await waitUntil(() => !isPidAlive(root.pid!), 20_000)).toBe(true);
-    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
+    // Every enumerated PID, payload included — not whichever one the process
+    // table happened to list first.
+    expect(await survivorsOf(subtree)).toEqual([]);
   }, 60_000);
 
   /**
@@ -103,18 +169,19 @@ describe('killProcessTree end-to-end on this platform', () => {
     const root = spawnTwoLevelTree();
     await settle();
 
-    const descendants = await collectDescendantIdentities(root.pid!);
-    expect(descendants.length).toBeGreaterThan(0);
-    const childPid = descendants[0]!.pid;
+    const descendants = await enumerateDescendants(root.pid!);
+    const payload = payloadPid(descendants);
 
     // No /T: kill ONLY the root, leaving the descendant orphaned and alive.
     execFileSync('taskkill', ['/PID', String(root.pid!), '/F'], { windowsHide: true, stdio: 'ignore' });
     expect(await waitUntil(() => !isPidAlive(root.pid!), 20_000)).toBe(true);
-    expect(isPidAlive(childPid)).toBe(true);
+    // The payload specifically: a console host outliving its shell would not
+    // hold the worker port, so reaping only that proves nothing.
+    expect(isPidAlive(payload)).toBe(true);
 
     await killProcessTree(root.pid!);
 
-    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
+    expect(await survivorsOf(descendants.map(entry => entry.pid))).toEqual([]);
   }, 60_000);
 
   it('treats an already-dead target as success, not failure', async () => {
@@ -125,17 +192,16 @@ describe('killProcessTree end-to-end on this platform', () => {
     await settle();
     const pid = root.pid!;
 
-    const descendants = await collectDescendantIdentities(pid);
-    expect(descendants.length).toBeGreaterThan(0);
-    const childPid = descendants[0]!.pid;
+    const descendants = await enumerateDescendants(pid);
+    const subtree = [pid, ...descendants.map(entry => entry.pid)];
+    expect(subtree).toContain(payloadPid(descendants));
 
     await killProcessTree(pid);
-    expect(await waitUntil(() => !isPidAlive(pid), 20_000)).toBe(true);
-    // The first call took a LIVE two-level tree, so the descendant is as much
+    // The first call took a LIVE two-level tree, so the descendants are as much
     // its responsibility as the root. Asserting only the root let this test
     // pass against the orphan defect the reap above exists to fix, and left a
     // surviving `ping` behind on every green Windows draw of the soak.
-    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
+    expect(await survivorsOf(subtree)).toEqual([]);
 
     // Second call against the corpse must resolve, not reject.
     await killProcessTree(pid);
@@ -145,20 +211,21 @@ describe('killProcessTree end-to-end on this platform', () => {
     const root = spawnTwoLevelTree();
     await settle();
 
-    const descendants = await collectDescendantIdentities(root.pid!);
-    expect(descendants.length).toBeGreaterThan(0);
-    const childPid = descendants[0]!.pid;
+    const descendants = await enumerateDescendants(root.pid!);
+    const subtree = [root.pid!, ...descendants.map(entry => entry.pid)];
+    expect(subtree).toContain(payloadPid(descendants));
 
     // A token that cannot belong to this process: the gate must short-circuit
     // BEFORE taskkill /T /F, leaving the subtree untouched.
     await killProcessTree(root.pid!, { expectedStartToken: 'not-this-processes-start-token' });
     await settle(1_000);
 
-    expect(isPidAlive(root.pid!)).toBe(true);
-    expect(isPidAlive(childPid)).toBe(true);
+    expect(subtree.filter(pid => !isPidAlive(pid))).toEqual([]);
 
-    try { process.kill(root.pid!, 'SIGKILL'); } catch { /* fine */ }
-    try { process.kill(childPid, 'SIGKILL'); } catch { /* fine */ }
+    // Killing only descendants[0] here leaked a `ping` on every soak draw.
+    for (const pid of subtree) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* fine */ }
+    }
   }, 60_000);
 
   it('still kills when the supplied root identity matches', async () => {
@@ -167,16 +234,15 @@ describe('killProcessTree end-to-end on this platform', () => {
     const root = spawnTwoLevelTree();
     await settle();
 
-    const descendants = await collectDescendantIdentities(root.pid!);
-    expect(descendants.length).toBeGreaterThan(0);
-    const childPid = descendants[0]!.pid;
+    const descendants = await enumerateDescendants(root.pid!);
+    const subtree = [root.pid!, ...descendants.map(entry => entry.pid)];
+    expect(subtree).toContain(payloadPid(descendants));
 
     const token = captureProcessStartToken(root.pid!);
     expect(token).not.toBeNull();
 
     await killProcessTree(root.pid!, { expectedStartToken: token });
 
-    expect(await waitUntil(() => !isPidAlive(root.pid!), 20_000)).toBe(true);
-    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
+    expect(await survivorsOf(subtree)).toEqual([]);
   }, 60_000);
 });
