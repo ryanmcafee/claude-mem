@@ -48,7 +48,7 @@ mock.module('../../../src/services/sync/ChromaMcpManager.js', () => ({
   },
 }));
 
-import { ChromaSync } from '../../../src/services/sync/ChromaSync.js';
+import { ChromaSync, type StoredObservation } from '../../../src/services/sync/ChromaSync.js';
 import { ChromaSyncState } from '../../../src/services/sync/ChromaSyncState.js';
 import { logger } from '../../../src/utils/logger.js';
 
@@ -56,7 +56,7 @@ afterAll(() => {
   mock.module('../../../src/services/sync/ChromaMcpManager.js', () => realChromaMcpManagerSnapshot);
 });
 
-function makeObservationRow(id: number, project: string, factCount = 0) {
+function makeObservationRow(id: number, project: string, factCount = 0): StoredObservation {
   return {
     id,
     memory_session_id: `mem-${id}`,
@@ -82,7 +82,7 @@ function makeStore(project: string, observationIds: number[]) {
   return makeStoreFromRows(project, observationRows);
 }
 
-function makeStoreFromRows(project: string, observationRows: ReturnType<typeof makeObservationRow>[]) {
+function makeStoreFromRows(project: string, observationRows: StoredObservation[]) {
 
   return {
     db: {

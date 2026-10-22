@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { mockFetch } from '../helpers/fetch-mock';
 
 const originalFetch = globalThis.fetch;
 const originalDataDir = process.env.CLAUDE_MEM_DATA_DIR;
@@ -53,7 +54,7 @@ describe('export-memories script', () => {
     let batchBody: unknown;
     let searchSignal: unknown;
     let batchSignal: unknown;
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = mockFetch(async (input, init) => {
       const url = String(input);
       if (url.startsWith('http://127.0.0.1:45678/api/search?')) {
         searchSignal = init?.signal;
@@ -82,7 +83,7 @@ describe('export-memories script', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
     const outputFile = join(tempDir, 'export.json');
 
     await exportMemories('needle', outputFile, 'project-a');
@@ -107,10 +108,10 @@ describe('export-memories script', () => {
       CLAUDE_MEM_WORKER_PORT: '45678abc',
     }));
 
-    const fetchMock = mock(async () => new Response('{}', { status: 200 }));
+    const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT',
@@ -126,10 +127,10 @@ describe('export-memories script', () => {
       CLAUDE_MEM_WORKER_PORT: '',
     }));
 
-    const fetchMock = mock(async () => new Response('{}', { status: 200 }));
+    const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT in settings.json: missing',
@@ -145,10 +146,10 @@ describe('export-memories script', () => {
       CLAUDE_MEM_WORKER_PORT: 45678,
     }));
 
-    const fetchMock = mock(async () => new Response('{}', { status: 200 }));
+    const fetchMock = mockFetch(async () => new Response('{}', { status: 200 }));
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Invalid CLAUDE_MEM_WORKER_PORT in settings.json: missing',
@@ -170,7 +171,7 @@ describe('export-memories script', () => {
       spyOn(console, 'error').mockImplementation(() => {}),
     );
 
-    const fetchMock = mock(async (input: RequestInfo | URL) => {
+    const fetchMock = mockFetch(async (input) => {
       const url = String(input);
       if (url.startsWith('http://127.0.0.1:45678/api/search?')) {
         return new Response(JSON.stringify({
@@ -191,7 +192,7 @@ describe('export-memories script', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
     const outputFile = join(tempDir, 'export.json');
 
     await expect(exportMemories('needle', outputFile)).rejects.toThrow(
@@ -214,12 +215,12 @@ describe('export-memories script', () => {
       spyOn(console, 'error').mockImplementation(() => {}),
     );
 
-    const fetchMock = mock(async () => {
+    const fetchMock = mockFetch(async () => {
       throw new DOMException('The operation was aborted.', 'AbortError');
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const { exportMemories } = await import('../../scripts/export-memories.ts');
+    const { exportMemories } = await import('../../scripts/export-memories.js');
 
     await expect(exportMemories('needle', join(tempDir, 'export.json'))).rejects.toThrow(
       'Worker request timed out after 30000ms',

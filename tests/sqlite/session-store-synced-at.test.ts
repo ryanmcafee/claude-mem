@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { SessionStore } from '../../src/services/sqlite/SessionStore.js';
 import { CloudSync } from '../../src/services/sync/CloudSync.js';
 import { SyncApply } from '../../src/services/sync/SyncApply.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 const SYNCED_TABLES = ['observations', 'session_summaries', 'user_prompts'] as const;
 
@@ -217,6 +218,7 @@ describe('SessionStore SyncHub launch baseline', () => {
         CLAUDE_MEM_CLOUD_SYNC_USER_ID: 'test-user',
         CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://hub.test',
         CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: 'epoch-boundary-device',
+        CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: 'epoch-boundary-test',
       });
       expect(sync.status().pending).toEqual({
         observations: 1,
@@ -337,7 +339,7 @@ describe('SessionStore SyncHub launch baseline', () => {
 
       let seq = 0;
       let failNext = false;
-      const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const fetchImpl = mockFetch(async (_input, init) => {
         if (failNext) {
           failNext = false;
           return new Response('offline', { status: 503 });
@@ -363,7 +365,7 @@ describe('SessionStore SyncHub launch baseline', () => {
           };
         });
         return Response.json({ acked, head_seq: String(seq), projected_seq: String(seq) });
-      }) as typeof fetch;
+      });
       sync = new CloudSync(db, {
         CLAUDE_MEM_CLOUD_SYNC_TOKEN: 'token',
         CLAUDE_MEM_CLOUD_SYNC_USER_ID: 'user',

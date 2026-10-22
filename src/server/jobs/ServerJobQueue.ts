@@ -51,6 +51,38 @@ export interface ServerJobObservedListener {
   onError?: (error: unknown) => void;
 }
 
+// The Queue and Worker calls this class makes. BullMQ instances satisfy them,
+// and so can a test fake without standing in for all of Queue or Worker.
+export interface ServerJobQueueHandle<TPayload> {
+  add(name: string, data: TPayload, opts?: JobsOptions): Promise<unknown>;
+  getJob(jobId: string): Promise<Job<TPayload> | null | undefined>;
+  getJobCounts(...types: string[]): Promise<Partial<Record<keyof ServerJobCounts, number>>>;
+  remove(jobId: string): Promise<unknown>;
+  close(): Promise<void>;
+}
+
+// Each listener names only the Job fields its handler reads.
+export interface ServerJobWorkerEvents<TPayload> {
+  error: (error: Error) => void;
+  active: (job: Pick<Job<TPayload>, 'id'>) => void;
+  completed: (job: Pick<Job<TPayload>, 'id' | 'data'>, returnvalue: unknown) => void;
+  failed: (job: Pick<Job<TPayload>, 'id' | 'data' | 'attemptsMade'> | undefined, error: Error) => void;
+  progress: (job: Pick<Job<TPayload>, 'id'>, progress: unknown) => void;
+  stalled: (jobId: string) => void;
+}
+
+// Overloads rather than one generic `on`: BullMQ's generic Worker.on only relates per event.
+export interface ServerJobWorkerHandle<TPayload> {
+  on(event: 'error', listener: ServerJobWorkerEvents<TPayload>['error']): unknown;
+  on(event: 'active', listener: ServerJobWorkerEvents<TPayload>['active']): unknown;
+  on(event: 'completed', listener: ServerJobWorkerEvents<TPayload>['completed']): unknown;
+  on(event: 'failed', listener: ServerJobWorkerEvents<TPayload>['failed']): unknown;
+  on(event: 'progress', listener: ServerJobWorkerEvents<TPayload>['progress']): unknown;
+  on(event: 'stalled', listener: ServerJobWorkerEvents<TPayload>['stalled']): unknown;
+  run(): unknown;
+  close(): Promise<void>;
+}
+
 export interface ServerJobQueueOptions<TPayload> {
   name: string;
   config: RedisQueueConfig;
@@ -58,18 +90,25 @@ export interface ServerJobQueueOptions<TPayload> {
   lockDurationMs?: number;
   defaultJobOptions?: JobsOptions;
   // Test seams: allow injecting fakes without touching Redis.
-  queueFactory?: (name: string, options: QueueOptions) => Pick<
-    Queue<TPayload>,
-    'add' | 'getJob' | 'getJobCounts' | 'remove' | 'close'
-  >;
+  queueFactory?: (name: string, options: QueueOptions) => ServerJobQueueHandle<TPayload>;
   workerFactory?: (
     name: string,
     processor: Processor<TPayload> | null,
     options: WorkerOptions
-  ) => Pick<Worker<TPayload>, 'on' | 'run' | 'close'>;
+  ) => ServerJobWorkerHandle<TPayload>;
 }
 
 const DEFAULT_LOCK_DURATION_MS = 5 * 60 * 1000;
+
+// Built outside any contextual type so BullMQ keeps its default job-data type;
+// a generic TPayload leaves its conditional Job types unresolved.
+function openBullmqQueue(name: string, options: QueueOptions) {
+  return new Queue(name, options);
+}
+
+function openBullmqWorker(name: string, processor: Processor, options: WorkerOptions) {
+  return new Worker(name, processor, options);
+}
 
 export class ServerJobQueue<TPayload extends object = object> {
   readonly name: string;
@@ -79,8 +118,8 @@ export class ServerJobQueue<TPayload extends object = object> {
   private readonly defaultJobOptions: JobsOptions;
   private readonly queueFactory?: ServerJobQueueOptions<TPayload>['queueFactory'];
   private readonly workerFactory?: ServerJobQueueOptions<TPayload>['workerFactory'];
-  private queue: ReturnType<NonNullable<ServerJobQueueOptions<TPayload>['queueFactory']>> | Queue<TPayload> | null = null;
-  private worker: ReturnType<NonNullable<ServerJobQueueOptions<TPayload>['workerFactory']>> | Worker<TPayload> | null = null;
+  private queue: ServerJobQueueHandle<TPayload> | null = null;
+  private worker: ServerJobWorkerHandle<TPayload> | null = null;
   private queueEvents: QueueEvents | null = null;
   private started = false;
   private readonly counters: ServerJobLifecycleCounters = { stalled: 0, errored: 0 };
@@ -109,7 +148,7 @@ export class ServerJobQueue<TPayload extends object = object> {
     this.workerFactory = options.workerFactory;
   }
 
-  private getQueue(): NonNullable<typeof this.queue> {
+  private getQueue(): ServerJobQueueHandle<TPayload> {
     if (this.queue) {
       return this.queue;
     }
@@ -118,18 +157,13 @@ export class ServerJobQueue<TPayload extends object = object> {
       prefix: this.config.prefix,
       defaultJobOptions: this.defaultJobOptions
     };
-    this.queue = this.queueFactory
-      ? this.queueFactory(this.name, queueOptions)
-      : new Queue<TPayload>(this.name, queueOptions);
-    return this.queue;
+    const queue = this.queueFactory?.(this.name, queueOptions) ?? openBullmqQueue(this.name, queueOptions);
+    this.queue = queue;
+    return queue;
   }
 
   private async addToQueue(jobId: string, payload: TPayload, options?: JobsOptions): Promise<void> {
-    await (this.getQueue().add as (
-      name: string,
-      data: TPayload,
-      opts?: JobsOptions
-    ) => Promise<unknown>)(this.name, payload, {
+    await this.getQueue().add(this.name, payload, {
       ...this.defaultJobOptions,
       ...options,
       jobId
@@ -150,7 +184,7 @@ export class ServerJobQueue<TPayload extends object = object> {
 
   async getJob(jobId: string): Promise<Job<TPayload> | null | undefined> {
     try {
-      return (await this.getQueue().getJob(jobId)) as Job<TPayload> | null | undefined;
+      return await this.getQueue().getJob(jobId);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       throw this.toRedisUnavailableError(err);
@@ -253,57 +287,53 @@ export class ServerJobQueue<TPayload extends object = object> {
       concurrency: this.concurrency,
       lockDuration: this.lockDurationMs
     };
-    const worker = this.workerFactory
-      ? this.workerFactory(this.name, processor, workerOptions)
-      : new Worker<TPayload>(this.name, processor, workerOptions);
-    worker.on('error', (error: unknown) => this.notifyQueueError(error, 'worker'));
+    const worker: ServerJobWorkerHandle<TPayload> = this.workerFactory?.(this.name, processor, workerOptions)
+      ?? openBullmqWorker(this.name, processor, workerOptions);
+    worker.on('error', (error) => this.notifyQueueError(error, 'worker'));
     // BullMQ Worker exposes `active`, `completed`, `failed`, `progress`, and
     // `stalled` events. We attach to all five because the runtime relies on
     // them for observability (Phase 12).
-    if (typeof (worker as { on?: unknown }).on === 'function') {
-      const w = worker as Worker<TPayload>;
-      w.on('active', (job: Job<TPayload>) => {
-        if (job.id) this.jobStartTimes.set(job.id, Date.now());
+    worker.on('active', (job) => {
+      if (job.id) this.jobStartTimes.set(job.id, Date.now());
+    });
+    worker.on('completed', (job, returnvalue) => {
+      const startedAt = job.id ? this.jobStartTimes.get(job.id) : undefined;
+      const durationMs = startedAt ? Date.now() - startedAt : 0;
+      if (job.id) this.jobStartTimes.delete(job.id);
+      const sourceType = (job.data as { source_type?: string } | undefined)?.source_type ?? '?';
+      logger.info('QUEUE', `[generation] job=${job.id ?? '?'} source_type=${sourceType} duration=${durationMs}ms`, {
+        queue: this.name,
+        jobId: job.id ?? null,
+        sourceType,
+        durationMs,
       });
-      w.on('completed', (job: Job<TPayload>, returnvalue: unknown) => {
-        const startedAt = job.id ? this.jobStartTimes.get(job.id) : undefined;
-        const durationMs = startedAt ? Date.now() - startedAt : 0;
-        if (job.id) this.jobStartTimes.delete(job.id);
-        const sourceType = (job.data as { source_type?: string } | undefined)?.source_type ?? '?';
-        logger.info('QUEUE', `[generation] job=${job.id ?? '?'} source_type=${sourceType} duration=${durationMs}ms`, {
-          queue: this.name,
-          jobId: job.id ?? null,
-          sourceType,
-          durationMs,
-        });
-        for (const l of this.listeners) {
-          try { l.onCompleted?.(job.id ?? '?', durationMs, returnvalue); } catch { /* swallow listener errors only */ }
-        }
+      for (const l of this.listeners) {
+        try { l.onCompleted?.(job.id ?? '?', durationMs, returnvalue); } catch { /* swallow listener errors only */ }
+      }
+    });
+    worker.on('failed', (job, error) => {
+      if (job?.id) this.jobStartTimes.delete(job.id);
+      const sourceType = (job?.data as { source_type?: string } | undefined)?.source_type ?? '?';
+      const attemptsMade = job?.attemptsMade ?? 0;
+      logger.warn('QUEUE', `[generation] job=${job?.id ?? '?'} source_type=${sourceType} attempts=${attemptsMade} reason=${error.message}`, {
+        queue: this.name,
+        jobId: job?.id ?? null,
+        sourceType,
+        attemptsMade,
+        reason: error.message,
       });
-      w.on('failed', (job: Job<TPayload> | undefined, error: Error) => {
-        if (job?.id) this.jobStartTimes.delete(job.id);
-        const sourceType = (job?.data as { source_type?: string } | undefined)?.source_type ?? '?';
-        const attemptsMade = job?.attemptsMade ?? 0;
-        logger.warn('QUEUE', `[generation] job=${job?.id ?? '?'} source_type=${sourceType} attempts=${attemptsMade} reason=${error.message}`, {
-          queue: this.name,
-          jobId: job?.id ?? null,
-          sourceType,
-          attemptsMade,
-          reason: error.message,
-        });
-        for (const l of this.listeners) {
-          try { l.onFailed?.(job?.id, attemptsMade, error.message); } catch { /* swallow */ }
-        }
+      for (const l of this.listeners) {
+        try { l.onFailed?.(job?.id, attemptsMade, error.message); } catch { /* swallow */ }
+      }
+    });
+    worker.on('progress', (job, progress) => {
+      logger.debug?.('QUEUE', `[generation] job=${job.id ?? '?'} progress`, {
+        queue: this.name,
+        jobId: job.id ?? null,
+        progress,
       });
-      w.on('progress', (job: Job<TPayload>, progress: unknown) => {
-        logger.debug?.('QUEUE', `[generation] job=${job.id ?? '?'} progress`, {
-          queue: this.name,
-          jobId: job.id ?? null,
-          progress,
-        });
-      });
-      w.on('stalled', (jobId: string) => this.notifyStalled(jobId, 'worker'));
-    }
+    });
+    worker.on('stalled', (jobId) => this.notifyStalled(jobId, 'worker'));
     worker.run();
     this.worker = worker;
 

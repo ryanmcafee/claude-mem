@@ -20,7 +20,7 @@ const createFindBun = new Function(
   existsSync: (path: string) => boolean;
   homedir: () => string;
   join: typeof join;
-  spawnSync: typeof spawnSync;
+  spawnSync: (command: string, args: string[], options: object) => WhereResult;
 }) => FindBun;
 
 interface WhereResult {
@@ -82,11 +82,10 @@ function findBunForWhereOutput(stdout: string) {
     existsSync: () => false,
     homedir: () => 'C:\\Users\\fixture',
     join,
-    spawnSync: (() => ({
+    spawnSync: () => ({
       status: 0,
       stdout,
-      stderr: ''
-    })) as typeof spawnSync
+    })
   })();
 }
 
@@ -108,6 +107,9 @@ describe('bun-runner.js Windows PATH ordering', () => {
 });
 
 windowsDescribe('bun-runner.js Windows executable resolution', () => {
+  // First launch of a freshly copied bun.exe on a cold runner can exceed bun's 5s default.
+  const SPAWN_FIXTURE_TIMEOUT_MS = 30_000;
+
   function withFixture<T>(files: Record<string, string | null>, run: (fixtureDir: string) => T) {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'bun-runner-'));
     const scriptPath = join(fixtureDir, 'fixture.js');
@@ -165,7 +167,7 @@ windowsDescribe('bun-runner.js Windows executable resolution', () => {
       expect(result.stderr).not.toContain('Failed to start Bun');
       expect(result.stderr).not.toContain('doubled-quote');
     });
-  });
+  }, SPAWN_FIXTURE_TIMEOUT_MS);
 
   it('prefers bun.exe over bun.cmd from where', () => {
     withFixture({
@@ -183,7 +185,7 @@ windowsDescribe('bun-runner.js Windows executable resolution', () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('fixture launched');
     });
-  });
+  }, SPAWN_FIXTURE_TIMEOUT_MS);
 
   it('keeps bun.cmd as the Windows fallback', () => {
     const bunExecutable = process.execPath.replace(/\\/g, '\\\\');
@@ -198,7 +200,7 @@ windowsDescribe('bun-runner.js Windows executable resolution', () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('fixture launched');
     });
-  });
+  }, SPAWN_FIXTURE_TIMEOUT_MS);
 });
 
 describe('bun-runner.js findBun: absolute bun.exe resolution (#3196)', () => {

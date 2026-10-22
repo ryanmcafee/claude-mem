@@ -14,6 +14,7 @@ import { SessionStore } from '../../../src/services/sqlite/SessionStore.js';
 import { SyncApply } from '../../../src/services/sync/SyncApply.js';
 import { SyncClient, type SyncClientOptions } from '../../../src/services/sync/SyncClient.js';
 import { observationChange, type TestHubChange } from './content-v2-helpers.js';
+import { mockFetch } from '../../helpers/fetch-mock';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -34,7 +35,7 @@ function makeHub(initial: { epoch: string; ops?: HubOp[] }) {
     failNext: 0,
     hang: false,
   };
-  const impl = (async (input: any, init?: any) => {
+  const impl = mockFetch(async (input: any, init?: any) => {
     const url = new URL(String(input));
     const since = Number(url.searchParams.get('since') ?? '0');
     const limit = Number(url.searchParams.get('limit') ?? '500');
@@ -63,7 +64,7 @@ function makeHub(initial: { epoch: string; ops?: HubOp[] }) {
       head_seq: String(head),
       more: page.length === limit && lastSeq < head,
     }), { status: 200 });
-  }) as typeof fetch;
+  });
   return { state, impl };
 }
 
@@ -236,10 +237,10 @@ describe('SyncClient', () => {
 
   it('pauses the poll loop on a 401/403 instead of retrying on the normal ladder', async () => {
     let requests = 0;
-    const impl = (async () => {
+    const impl = mockFetch(async () => {
       requests++;
       return new Response('{"code":"subscription_inactive","error":"subscription inactive"}', { status: 403 });
-    }) as typeof fetch;
+    });
     const client = makeClient(impl, { isSessionActive: () => true, authPauseMs: 3_600_000 });
     client.start();
     await sleep(300); // ~15 polls at 20ms without the pause
@@ -252,10 +253,10 @@ describe('SyncClient', () => {
   it('lifts the auth pause when a successful push reports head_seq', async () => {
     let reject = true;
     const { state, impl: hubImpl } = makeHub({ epoch: '1', ops: [hubOp(1, '11')] });
-    const impl = (async (input: any, init?: any) => {
+    const impl = mockFetch(async (input: any, init?: any) => {
       if (reject) return new Response('{"error":"invalid token"}', { status: 401 });
       return hubImpl(input, init);
-    }) as typeof fetch;
+    });
     const client = makeClient(impl, { isSessionActive: () => true, authPauseMs: 3_600_000 });
     client.start();
     await sleep(100);
@@ -306,7 +307,7 @@ describe('SyncClient', () => {
     const change = hubOp(1, '18446744073709551615');
     change.seq = '9007199254740993';
     const requests: string[] = [];
-    const impl = (async (input: any) => {
+    const impl = mockFetch(async (input: any) => {
       const url = new URL(String(input));
       requests.push(url.searchParams.get('since')!);
       return new Response(JSON.stringify({
@@ -316,7 +317,7 @@ describe('SyncClient', () => {
         head_seq: '9007199254740993',
         more: false,
       }), { status: 200 });
-    }) as typeof fetch;
+    });
     await makeClient(impl).pullOnce({ timeoutMs: 5_000 });
 
     expect(requests).toEqual(['9007199254740992']);

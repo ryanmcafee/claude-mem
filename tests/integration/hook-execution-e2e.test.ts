@@ -1,6 +1,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, spyOn, mock } from 'bun:test';
 import { logger } from '../../src/utils/logger.js';
+import { readJson } from '../helpers/http-json.js';
+import type { ErrorBody, HealthBody, ReadinessBody, VersionBody } from '../helpers/server-core-routes.js';
 
 // Capture the real middleware module before mock.module mutates the live
 // namespace, then re-register the snapshot in afterAll. bun's mock.module is
@@ -74,7 +76,7 @@ describe('Hook Execution E2E', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<HealthBody>(response);
       expect(body.status).toBe('ok');
       expect(body.initialized).toBe(true);
       expect(body.mcpReady).toBe(true);
@@ -89,7 +91,7 @@ describe('Hook Execution E2E', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/readiness`);
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<ReadinessBody>(response);
       expect(body.status).toBe('ready');
     });
 
@@ -109,7 +111,7 @@ describe('Hook Execution E2E', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/readiness`);
       expect(response.status).toBe(503);
 
-      const body = await response.json();
+      const body = await readJson<ReadinessBody>(response);
       expect(body.status).toBe('initializing');
       expect(body.message).toBeDefined();
     });
@@ -121,7 +123,7 @@ describe('Hook Execution E2E', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/version`);
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<VersionBody>(response);
       expect(body.version).toBeDefined();
       expect(typeof body.version).toBe('string');
     });
@@ -168,13 +170,13 @@ describe('Hook Execution E2E', () => {
       await server.listen(testPort, '127.0.0.1');
 
       let response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      let body = await response.json();
+      let body = await readJson<HealthBody>(response);
       expect(body.initialized).toBe(false);
 
       isInitialized = true;
 
       response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      body = await response.json();
+      body = await readJson<HealthBody>(response);
       expect(body.initialized).toBe(true);
     });
   });
@@ -188,7 +190,7 @@ describe('Hook Execution E2E', () => {
       const response = await fetch(`http://127.0.0.1:${testPort}/api/nonexistent`);
       expect(response.status).toBe(404);
 
-      const body = await response.json();
+      const body = await readJson<ErrorBody>(response);
       expect(body.error).toBe('NotFound');
     });
 

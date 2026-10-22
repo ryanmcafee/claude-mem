@@ -30,7 +30,7 @@ function pluginSkillIdsOnDisk(): string[] {
 
 describe('FIRST_PARTY_SKILL_IDS pinned to plugin/skills/', () => {
   it('matches every plugin/skills/*/SKILL.md directory and no others', () => {
-    expect([...FIRST_PARTY_SKILL_IDS].sort()).toEqual(pluginSkillIdsOnDisk());
+    expect(pluginSkillIdsOnDisk()).toEqual([...FIRST_PARTY_SKILL_IDS].sort());
   });
 
   it('collapses sibling mem-search copies to one first-party id', () => {

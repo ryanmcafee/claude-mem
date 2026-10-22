@@ -10,7 +10,8 @@ import {
   ObservationRecord,
   SessionSummaryRecord,
   UserPromptRecord,
-  LatestPromptResult
+  LatestPromptResult,
+  SdkSessionRecord
 } from '../../types/database.js';
 import type { ObservationSearchResult, SessionSummarySearchResult } from './types.js';
 import { computeObservationContentHash } from './observations/store.js';
@@ -2821,20 +2822,7 @@ export class SessionStore {
     `).run(observedModel || null, observedBilling || null, sessionDbId);
   }
 
-  getSdkSessionsBySessionIds(memorySessionIds: string[]): {
-    id: number;
-    content_session_id: string;
-    memory_session_id: string;
-    project: string;
-    platform_source: string;
-    user_prompt: string;
-    custom_title: string | null;
-    started_at: string;
-    started_at_epoch: number;
-    completed_at: string | null;
-    completed_at_epoch: number | null;
-    status: string;
-  }[] {
+  getSdkSessionsBySessionIds(memorySessionIds: string[]): SdkSessionRecord[] {
     if (memorySessionIds.length === 0) return [];
 
     const placeholders = memorySessionIds.map(() => '?').join(',');

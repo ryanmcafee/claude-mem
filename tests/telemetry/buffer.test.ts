@@ -297,7 +297,8 @@ describe('flushSession() — observer_turn_rollup', () => {
   });
 
   it('drops a session_compressed record with a non-numeric session key', () => {
-    // @ts-expect-error — exercising the runtime guard against a null key
+    // `record` accepts a null key for time-window events, so this exercises the
+    // runtime guard that keeps a per-session event from landing in a bucket.
     telemetryBuffer.record('session_compressed', null, { outcome: 'ok' });
     expect(telemetryBuffer.__activeSessionBucketCount()).toBe(0);
     telemetryBuffer.drainAllSessions('worker_shutdown');

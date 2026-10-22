@@ -26,6 +26,7 @@ import {
   SYNC_FAILING_WARN_AFTER_MS,
   type SyncHealthState,
 } from '../../../src/shared/sync-health.js';
+import { mockFetch } from '../../helpers/fetch-mock';
 
 const ISO = '2026-09-26T00:00:00.000Z';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -153,7 +154,7 @@ describe('CloudSync failure handling', () => {
     let mode: 'reject' | 'accept' = 'reject';
     let seq = 0;
     const calls: string[] = [];
-    const impl = (async (input: any, init?: any) => {
+    const impl = mockFetch(async (input: any, init?: any) => {
       const url = String(input);
       calls.push(url);
       if (mode === 'reject') {
@@ -165,7 +166,7 @@ describe('CloudSync failure handling', () => {
       const result = ackAll(String(init?.body ?? ''), seq);
       seq = result.seq;
       return result.response;
-    }) as typeof fetch;
+    });
     const sync = makeSync(impl, { authRetryMs: 150 });
     seedObservation('one');
 
@@ -195,7 +196,7 @@ describe('CloudSync failure handling', () => {
   });
 
   it('marks invalid_token for a bare 401 "invalid token" from older servers', async () => {
-    const impl = (async () => new Response('{"error":"invalid token"}', { status: 401 })) as typeof fetch;
+    const impl = mockFetch(async () => new Response('{"error":"invalid token"}', { status: 401 }));
     const sync = makeSync(impl);
     seedObservation('one');
     await sync.flush();
@@ -207,12 +208,12 @@ describe('CloudSync failure handling', () => {
   it('records a failure streak in the ledger and clears it on success', async () => {
     let fail = true;
     let seq = 0;
-    const impl = (async (_input: any, init?: any) => {
+    const impl = mockFetch(async (_input: any, init?: any) => {
       if (fail) return new Response('<!DOCTYPE html><html>1027</html>', { status: 500 });
       const result = ackAll(String(init?.body ?? ''), seq);
       seq = result.seq;
       return result.response;
-    }) as typeof fetch;
+    });
     const sync = makeSync(impl, { backoffInitialMs: 10_000 });
     seedObservation('one');
     await sync.flush();
@@ -237,7 +238,7 @@ describe('CloudSync failure handling', () => {
     const poisonId = (db.prepare("SELECT id FROM observations WHERE title = 'poison'").get() as { id: number }).id;
     let seq = 0;
     let rejections = 0;
-    const impl = (async (_input: any, init?: any) => {
+    const impl = mockFetch(async (_input: any, init?: any) => {
       const body = String(init?.body ?? '');
       const ops: Array<{ body: string }> = JSON.parse(body).ops;
       const poison = ops.map(op => JSON.parse(op.body)).find(env => env.origin_local_id === String(poisonId));
@@ -250,7 +251,7 @@ describe('CloudSync failure handling', () => {
       const result = ackAll(body, seq);
       seq = result.seq;
       return result.response;
-    }) as typeof fetch;
+    });
     const sync = makeSync(impl, { backoffInitialMs: 10_000 });
 
     for (let i = 1; i < POISON_OP_REJECTION_THRESHOLD; i++) {
@@ -273,7 +274,7 @@ describe('CloudSync failure handling', () => {
 
   it('does not quarantine anything for a batch-level 400', async () => {
     seedObservation('one');
-    const impl = (async () => new Response('{"error":"request body requires protocol_version: 2"}', { status: 400 })) as typeof fetch;
+    const impl = mockFetch(async () => new Response('{"error":"request body requires protocol_version: 2"}', { status: 400 }));
     const sync = makeSync(impl, { backoffInitialMs: 10_000 });
     for (let i = 0; i < POISON_OP_REJECTION_THRESHOLD + 1; i++) await sync.flush();
     expect(sync.status().quarantine.count).toBe(0);

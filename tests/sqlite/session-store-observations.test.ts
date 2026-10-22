@@ -42,17 +42,17 @@ describe('SessionStore.storeObservation', () => {
 
     const row = store.getObservationById(result.id);
     expect(row).not.toBeNull();
-    expect(row?.memory_session_id).toBe('mem-1');
-    expect(row?.project).toBe('project');
-    expect(row?.type).toBe('discovery');
-    expect(row?.title).toBe('Test Observation');
-    expect(row?.subtitle).toBe('Test Subtitle');
-    expect(row?.narrative).toBe('Test narrative content');
-    expect(JSON.parse(row?.facts as string)).toEqual(['fact1', 'fact2']);
-    expect(JSON.parse(row?.concepts as string)).toEqual(['concept1', 'concept2']);
-    expect(JSON.parse(row?.files_read as string)).toEqual(['/path/to/file1.ts']);
-    expect(JSON.parse(row?.files_modified as string)).toEqual(['/path/to/file2.ts']);
-    expect(row?.prompt_number).toBe(3);
+    expect(row!.memory_session_id).toBe('mem-1');
+    expect(row!.project).toBe('project');
+    expect(row!.type).toBe('discovery');
+    expect(row!.title).toBe('Test Observation');
+    expect(row!.subtitle).toBe('Test Subtitle');
+    expect(row!.narrative).toBe('Test narrative content');
+    expect(JSON.parse(row!.facts!)).toEqual(['fact1', 'fact2']);
+    expect(JSON.parse(row!.concepts!)).toEqual(['concept1', 'concept2']);
+    expect(JSON.parse(row!.files_read!)).toEqual(['/path/to/file1.ts']);
+    expect(JSON.parse(row!.files_modified!)).toEqual(['/path/to/file2.ts']);
+    expect(row!.prompt_number).toBe(3);
   });
 
   it('honors overrideTimestampEpoch (epoch + ISO)', () => {
