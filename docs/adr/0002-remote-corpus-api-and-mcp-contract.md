@@ -57,9 +57,8 @@
   PR #4, so `docs/adr/` is now identical on both branches and PR #4 remains the only
   author of the record.
 - Machine-readable contract: [`src/server/contracts/corpus-v1.ts`](../../src/server/contracts/corpus-v1.ts)
-  (this branch carries the pre-condition-16 shape; the mutually exclusive member
-  schemas land on MCAA-260's branch at `3b8f002f` and the corpus-level ones at
-  `e2c3bc38`, per conditions 16 and 18)
+  (carries the mutually exclusive owner/projected schemas of conditions 16 and 18
+  and the shared-scope filter refusal of condition 14; see Revision 11)
 - Compatibility tests: [`tests/contracts/corpus-v1.test.ts`](../../tests/contracts/corpus-v1.test.ts)
 
 ## Context
@@ -1113,7 +1112,7 @@ describing the old code went stale.
     refused. The test: changing only hidden metadata on a foreign row must not
     change any value a non-owner can observe.
 
-    **Satisfied at `73d01cd4`** by the **reject** branch, which this record
+    **Satisfied at `73d01cd4`** (contract half carried on this PR at `2f8dcb06`) by the **reject** branch, which this record
     ratifies as the better of the two it offered. The disclosure was live and
     needed no special grant: `memberPredicate()` is
     `((own project AND own team) OR ($shared AND observations.shared))`, so a
@@ -1211,7 +1210,7 @@ describing the old code went stale.
     decision. This is a contract-shape gate on the same merge of PR #7 as conditions
     10-17, not a behaviour change: no field gains a new meaning.
 
-    **Satisfied at `e2c3bc38`, test at `4bb84713`** (recorded in revision 9, checked
+    **Satisfied at `e2c3bc38`, test at `4bb84713`, carried on this PR at `2f8dcb06`** (recorded in revision 9, checked
     against MCAA-260's branch at `ea76c139`): `corpus-v1.ts` states
     `CorpusOwnerSummarySchema` (`projectId` and `filterDigest` required) and
     `CorpusProjectedSummarySchema` (`CorpusBaseSchema.strict()`, neither field
@@ -1544,7 +1543,7 @@ the check, and conditions 20-21 are what it found.
 The implementing engineer closed conditions 13 and 14 at `30b8347b` and `73d01cd4`
 and raised one design note rather than assuming it: condition 14's reject branch
 turns a `POST /v1/projects/{project}/corpora` request that previously returned 201
-into a 400. He was right to ask. This record's own bar is that a breaking contract
+into a 400. They were right to ask. This record's own bar is that a breaking contract
 change never ships without a version and a migration path, and on its face a
 narrowed accept set is exactly that.
 
@@ -1603,3 +1602,22 @@ in this record are deliberately fine-grained and a coarse "blocked on the projec
 reading strands the ones that are ready: **a blocker gates the conditions that name
 its module, not every condition on the same PR.** Conditions 10 part 3, 11 and 12 are
 genuinely blocked and are correctly still held.
+
+## Revision 11 -- the contract this record cites is now in this record's PR
+
+The independent review on MCAA-1404 rejected PR #4 at `e5e99714`. Conditions 14
+and 18 were recorded as satisfied at `73d01cd4`, `e2c3bc38` and `4bb84713`, but
+those commits exist only on MCAA-260's branch. PR #4's merge result still
+published one `CorpusSourceSchema` with required `projectId` and `metadata`, one
+summary with required `projectId` and `filterDigest`, and a filter schema that
+accepted `metadataMatch` over shared scope. A projected response could not pass
+that contract while a provenance-bearing one could.
+
+`2f8dcb06` takes `corpus-v1.ts` and its tests unchanged from MCAA-260 at
+`624d1d31`, so the record and the contract it describes merge together. The
+review's regression gate maps to tests as follows: owner and projected fixtures
+parse; every `CORPUS_PROVENANCE_FIELDS` entry is rejected on a projected corpus
+and row; half-projected corpora and rows are rejected; and
+`ProjectableCorpusFilterSchema` refuses every owner-only field over shared scope.
+Check the merge tree, not the implementation branch. A test that passes only on
+MCAA-260 does not satisfy a condition this PR records as met.
