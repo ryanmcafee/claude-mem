@@ -153,7 +153,7 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       expect(observation.teamId).toBeUndefined();
       expect(observation.serverSessionId).toBeUndefined();
       expect(observation.metadata).toBeUndefined();
-      expect(observation.sharedOrigin).toBeString();
+      expect(observation.sharedOrigin).toBeUndefined();
       expect(observation.shared).toBe(true);
     }
   }
@@ -557,7 +557,7 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       expect(projected!.serverSessionId).toBeUndefined();
       expect(projected!.teamId).toBeUndefined();
       expect(projected!.metadata).toBeUndefined();
-      expect(projected!.sharedOrigin).toBeString();
+      expect(projected!.sharedOrigin).toBeUndefined();
       const body = JSON.stringify(read.json);
       expect(body).not.toContain(PROJECT_A2_ID);
       expect(body).not.toContain(PUBLISHER_AGENT_ID);
