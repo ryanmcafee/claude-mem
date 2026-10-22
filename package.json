@@ -103,6 +103,7 @@
     "test:context": "bun test tests/context/",
     "test:infra": "bun test tests/infrastructure/",
     "test:server": "bun test tests/server/",
+    "test:postgres": "bun scripts/run-gated-suite.ts CLAUDE_MEM_TEST_POSTGRES_URL --timeout 120000",
     "e2e:server:docker": "bash scripts/e2e-server-docker.sh",
     "e2e:sync-matrix": "bun scripts/sync-matrix-e2e.ts",
     "check:postinstall-allowlist": "node scripts/check-postinstall-allowlist.js",

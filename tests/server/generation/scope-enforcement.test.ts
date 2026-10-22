@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import pg from 'pg';
+import type pg from 'pg';
 import {
   bootstrapServerPostgresSchema,
   createPostgresStorageRepositories,
-  type PostgresPoolClient,
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
 import {
@@ -16,7 +15,7 @@ import { ServerGenerationJobPayloadValidationError } from '../../../src/server/j
 import type { ServerGenerationProvider } from '../../../src/server/generation/providers/shared/types.js';
 import type { Job } from 'bullmq';
 import type { ServerGenerationJobPayload, GenerateObservationsForEventJob } from '../../../src/server/jobs/types.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
@@ -39,8 +38,7 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
-  let client: PostgresPoolClient;
+  let pool: pg.Pool;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
   let teamId: string;
@@ -51,16 +49,10 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
   let apiKeyId: string;
 
   beforeEach(async () => {
-    client = await pool.connect();
-    schemaName = `cm_phase11_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
-    await bootstrapServerPostgresSchema(client);
-    storage = createPostgresStorageRepositories(client);
-
-    pool.on('connect', (poolClient) => {
-      poolClient.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
+    schemaName = await createIsolatedSchema(testDatabaseUrl, 'cm_phase11');
+    pool = poolForSchema(testDatabaseUrl, schemaName);
+    await bootstrapServerPostgresSchema(pool);
+    storage = createPostgresStorageRepositories(pool);
 
     const team = await storage.teams.create({ name: 'team-a' });
     const foreignTeam = await storage.teams.create({ name: 'team-b' });
@@ -99,13 +91,8 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
   });
 
   afterEach(async () => {
-    if (client) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } catch {}
-      client.release();
-    }
-    pool.removeAllListeners('connect');
+    await pool.end();
+    await dropSchema(testDatabaseUrl, schemaName);
   });
 
   function makeJob(overrides: Partial<GenerateObservationsForEventJob> = {}): Job<ServerGenerationJobPayload> {
@@ -130,9 +117,9 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
   it('rejects payload when reloaded outbox team_id differs from job payload team_id', async () => {
     const provider = new StubProvider('<observation><type>x</type><title>OK</title></observation>');
     const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as pg.Pool,
+      pool,
       provider,
-    } as unknown as ConstructorParameters<typeof ProviderObservationGenerator>[0]);
+    });
 
     // Tampered payload — claims a different team.
     const job = makeJob({ team_id: foreignTeamId });
@@ -165,9 +152,9 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
 
     const provider = new StubProvider('<observation><type>x</type><title>OK</title></observation>');
     const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as pg.Pool,
+      pool,
       provider,
-    } as unknown as ConstructorParameters<typeof ProviderObservationGenerator>[0]);
+    });
 
     await expect(generator.process(makeJob())).rejects.toBeInstanceOf(ServerGenerationScopeViolationError);
     expect(provider.calls).toBe(0);
@@ -189,9 +176,9 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
   it('rejects malformed payload at execution boundary', async () => {
     const provider = new StubProvider('<observation><type>x</type><title>OK</title></observation>');
     const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as pg.Pool,
+      pool,
       provider,
-    } as unknown as ConstructorParameters<typeof ProviderObservationGenerator>[0]);
+    });
 
     // Strip required fields — this should be caught BEFORE any DB lookup.
     const job = {
@@ -210,9 +197,9 @@ describe('Phase 11 — ProviderObservationGenerator scope enforcement', () => {
       '<observation><type>discovery</type><title>OK</title><facts><fact>f</fact></facts></observation>',
     );
     const generator = new ProviderObservationGenerator({
-      pool: pool as unknown as pg.Pool,
+      pool,
       provider,
-    } as unknown as ConstructorParameters<typeof ProviderObservationGenerator>[0]);
+    });
 
     const result = await generator.process(makeJob());
     expect(result.status).toBe('completed');
