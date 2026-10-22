@@ -63,7 +63,6 @@ describe('MCAA-281 — observation projection', () => {
       'id',
       'kind',
       'shared',
-      'sharedOrigin',
       'updatedAtEpoch',
     ]);
     expect(JSON.stringify(projected)).not.toContain('acme-internal-pki');
@@ -77,29 +76,19 @@ describe('MCAA-281 — observation projection', () => {
       teamId: TEAM_A,
       projectId: 'acme-internal-pki',
     });
-    expect(projected.projectId).toBeUndefined();
-    expect(projected.metadata).toBeUndefined();
-    expect(projected.sharedOrigin).toBeString();
+    expect(Object.keys(projected).sort()).toEqual([
+      'content',
+      'createdAtEpoch',
+      'id',
+      'kind',
+      'shared',
+      'updatedAtEpoch',
+    ]);
   });
 
   it('treats same team plus same project as the only owner-authorized view', () => {
     expect(isOwnerAuthorizedView({ teamId: TEAM_A, projectId: 'p1' }, { teamId: TEAM_A, projectId: 'p1' })).toBe(true);
     expect(isOwnerAuthorizedView({ teamId: TEAM_A, projectId: 'p2' }, { teamId: TEAM_A, projectId: 'p1' })).toBe(false);
     expect(isOwnerAuthorizedView({ teamId: TEAM_B, projectId: 'p1' }, { teamId: TEAM_A, projectId: 'p1' })).toBe(false);
-  });
-
-  it('gives one origin the same token across rows and different origins different tokens', () => {
-    const viewer = { teamId: TEAM_B, projectId: 'bravo-web' };
-    const first = serializeObservationForViewer(row({ id: 'obs-1' }), viewer);
-    const second = serializeObservationForViewer(row({ id: 'obs-2' }), viewer);
-    const otherProject = serializeObservationForViewer(row({ projectId: 'acme-payments' }), viewer);
-    const otherTeam = serializeObservationForViewer(row({ teamId: TEAM_B }), {
-      teamId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      projectId: 'charlie',
-    });
-
-    expect(first.sharedOrigin).toBe(second.sharedOrigin);
-    expect(first.sharedOrigin).not.toBe(otherProject.sharedOrigin);
-    expect(first.sharedOrigin).not.toBe(otherTeam.sharedOrigin);
   });
 });
