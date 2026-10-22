@@ -34,7 +34,7 @@ jobs:
           irm bun.sh/install.ps1 | iex
         shell: pwsh
 
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
 
       - run: npm run build
 
@@ -143,7 +143,7 @@ jobs:
           enable-cache: true
           prune-cache: false
 
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
 
       # Required: resolveWorkerScript() falls back to <cwd>/plugin/scripts, so
       # the recycle test's version-mismatch probe needs a built worker present.

@@ -22,12 +22,8 @@ jobs:
         with:
           bun-version: latest
 
-      # The repo intentionally gitignores package-lock.json (.gitignore), so
-      # `cache: 'npm'` and `npm ci` (both require a committed lockfile) cannot
-      # be used here — matches windows.yml / npm-publish.yml, which install the
-      # same way.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # Plugin installations execute the committed bundles directly. Check
       # them before rebuilding, which would hide a stale published worker.
@@ -94,7 +90,7 @@ jobs:
           cache-python: true
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # resolveWorkerScript() falls back to <cwd>/plugin/scripts, so the
       # recycle gate's version-mismatch probe needs a built worker present.
@@ -229,7 +225,7 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # The grep guard fails the job if the suites silently skip because the
       # database URL did not reach them.
@@ -281,7 +277,7 @@ jobs:
           bun-version: latest
 
       - name: Install repository dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Install sync-api dependencies
         working-directory: services/sync-api
@@ -310,9 +306,8 @@ jobs:
         with:
           bun-version: latest
 
-      # See note in the build job: no committed root lockfile, so npm install.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # Run the frozen-lockfile drift check against the COMMITTED tree BEFORE
       # `npm run build` regenerates plugin/package.json + plugin/bun.lock (via
@@ -353,9 +348,8 @@ jobs:
         with:
           bun-version: latest
 
-      # See note in the build job: no committed lockfile, so npm install.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Docker is available
         run: docker compose version

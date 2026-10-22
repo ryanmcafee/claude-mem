@@ -16,7 +16,6 @@ dist/
 .claude/worktrees/
 plugin/data/
 plugin/data.backup/
-package-lock.json
 bun.lock
 !plugin/bun.lock
 !workers/sync-hub/bun.lock
