@@ -57,11 +57,16 @@ const CHROMA_MCP_PINNED_VERSION = '0.2.6';
 // `TypeError: Descriptors cannot be created directly` at chromadb import.
 // Capping below 7 lands on protobuf 6.x which opentelemetry tolerates.
 //
+// Why pydantic<2.14: chroma-mcp 0.2.6 pins mcp==1.6.0, which imports the
+// private `pydantic._internal._typing_extra.eval_type_backport` that pydantic
+// 2.14 removed, so `chroma-mcp --help` dies with ImportError at startup.
+//
 // These pins are runtime-only (uvx --with) so we don't have to fork
 // chroma-mcp upstream — they apply only to claude-mem's spawned subprocess.
 const CHROMA_MCP_DEP_OVERRIDES: ReadonlyArray<string> = [
   'onnxruntime>=1.20',
   'protobuf<7',
+  'pydantic<2.14',
 ];
 
 // Issue #2696 (revised): chroma-mcp is now spawned by invoking uvx DIRECTLY on
