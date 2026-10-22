@@ -137,7 +137,7 @@
     "express": "^5.2.1",
     "ioredis": "^5.10.1",
     "pg": "^8.20.0",
-    "posthog-node": "^5.36.15",
+    "posthog-node": "5.56.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "shell-quote": "1.9.0",
