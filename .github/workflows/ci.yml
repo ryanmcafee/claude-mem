@@ -82,7 +82,7 @@ jobs:
       # conditional `it.skip` or a curried `it.each` is counted the same as a
       # plain `it` — a grep over the diff misses both.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Fetch the base branch
         run: git fetch --no-tags --quiet origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
