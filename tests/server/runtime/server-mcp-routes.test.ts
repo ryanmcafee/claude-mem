@@ -18,8 +18,9 @@ import {
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
 import { DisabledServerQueueManager } from '../../../src/server/runtime/types.js';
-import { ServerClient } from '../../../src/services/hooks/server-client.js';
+import { ServerClient, type ServerJobStatusResponse } from '../../../src/services/hooks/server-client.js';
 import { logger } from '../../../src/utils/logger.js';
+import { readJson } from '../../helpers/http-json.js';
 import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
@@ -202,19 +203,21 @@ describe('Phase 8 MCP-backing REST endpoints (/v1/memories, /v1/search, /v1/cont
       eventType: 'mcp_status_test',
       occurredAtEpoch: Date.now(),
     });
-    const jobId = (recorded.generationJob as { id: string } | undefined)?.id;
-    expect(jobId).toBeTruthy();
+    const jobId = recorded.generationJob?.id;
+    if (!jobId) {
+      throw new Error('recordEvent returned no generationJob.id, so the status contract cannot be compared');
+    }
 
-    const status = await c.getJobStatus(jobId!);
+    const status = await c.getJobStatus(jobId);
     expect(status.generationJob.id).toBe(jobId);
     expect(status.generationJob.status).toBe('queued');
 
     // Compare with the raw HTTP response — same payload contract.
-    const raw = await fetch(`http://127.0.0.1:${port}/v1/jobs/${encodeURIComponent(jobId!)}`, {
+    const raw = await fetch(`http://127.0.0.1:${port}/v1/jobs/${encodeURIComponent(jobId)}`, {
       headers: { Authorization: `Bearer ${apiKeyRaw}` },
     });
     expect(raw.status).toBe(200);
-    const rawJson = await raw.json();
+    const rawJson = await readJson<ServerJobStatusResponse>(raw);
     expect(rawJson.generationJob.id).toBe(jobId);
   });
 
