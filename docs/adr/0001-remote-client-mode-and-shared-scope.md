@@ -76,8 +76,14 @@ deployment-specific branch of the storage layer (lens: **shared bones, not copie
 
 1. **Remote client mode never falls back.** When remote mode is requested and the configuration is
    incomplete, resolution throws `RemoteModeConfigError` naming the missing variable. No worker is
-   spawned and no local memory database is opened; `openConfiguredSqliteDatabase` asserts this, so
-   the guarantee does not depend on every caller remembering it.
+   spawned, and no local memory database is **created**: `openConfiguredSqliteDatabase` calls
+   `assertLocalMemoryDatabaseAllowed`, which refuses a create-capable open (anything other than an
+   explicit `readonly: true` or `create: false` object) of a path ending in the memory database
+   filename, `claude-mem.db`. That is the whole guard, and it is deliberately narrow: a read-only
+   open of an existing `claude-mem.db` from a previous local install stays allowed, a database
+   under any other filename is not checked, and a `new Database(...)` that bypasses
+   `openConfiguredSqliteDatabase` is not checked either. The guarantee is "remote mode will not
+   create the memory store through the shared opener", not "no SQLite file is ever touched".
 2. **The API key is the tenant binding.** Isolation is enforced server-side in the repository
    layer, not by the client and not by request fields.
 3. **Cross-tenant reads are opt-in per query and fail closed.** `scope` is optional on
@@ -93,9 +99,17 @@ deployment-specific branch of the storage layer (lens: **shared bones, not copie
    every new field is optional on request and additive on response, so an un-redeployed consumer
    keeps its exact current behaviour (lens: **backward compatibility by default**,
    **schema evolution**).
-6. **`shared` is returned on every serialized observation, unconditionally.** A consumer holding a
-   row needs to know whether it came from another tenant; a field that appears only sometimes makes
-   its absence ambiguous and pushes the inference onto the reader.
+6. **`shared` is returned on every observation the search, context and memory-write serializers
+   emit, unconditionally.** That is `serializeObservation` and the shared-row projection, which
+   between them cover `POST /v1/memories`, `POST /v1/search`, `POST /v1/context` and the three
+   `/v1/mcp` tools. It is not on every serializer: `serializeObservationWithSource`, behind
+   `GET /v1/events/:id/observations`, has no `shared` field, and needs none because its SQL binds
+   team and project to the authorized event and has no shared branch. On the surfaces that carry
+   it, the field is present on every row so its absence is never ambiguous.
+
+   **`shared` states publication, not ownership.** An owner's own row can be published, so
+   `shared: true` does not mean "from another tenant". Ownership is decided by the authorized team
+   **plus** the queried project, as the projection's owner test does, never by reading `shared`.
 
 ## Guarantees
 
@@ -127,10 +141,21 @@ deployment-specific branch of the storage layer (lens: **shared bones, not copie
 - **Server unreachable in remote mode.** Hooks error instead of writing locally. Agents lose memory
   capture for the outage window and say so; they do not silently accumulate a second store. This is
   the deliberate trade: visible failure over invisible divergence.
-- **Rollback.** `SHARED_SCOPE_DOWN_SQL` drops the index and the column. That direction is safe:
-  after the rollback nothing is shared and every query means what it meant before. Re-running the
-  bootstrap re-adds the column with its `false` default, so published state is lost rather than
-  restored -- a republish, not a data-loss event, because the observation rows themselves survive.
+- **Rollback.** `SHARED_SCOPE_DOWN_SQL` drops the index and the column. It is safe only in this
+  order:
+  1. **Application first.** Roll the server back to a binary that does not reference
+     `observations.shared`. The current binary names that column in its observation writes and
+     shared-scope reads (`PostgresObservationRepository`), and those statements fail once the
+     column is gone, so dropping it under the current binary is an outage, not a rollback.
+  2. **Schema second.** Run `SHARED_SCOPE_DOWN_SQL`.
+  3. **Re-adding is a reset, not a restore.** Starting a binary that runs the bootstrap re-adds the
+     column with its `false` default. Every publication flag is lost; the observation rows survive.
+     Republishing is an explicit, reviewed act by a curator key, never a replay of the old flags.
+
+  Rollback stops **future** shared reads. It does not revoke what was already disclosed: rows other
+  tenants read before the rollback, copies they persisted, and rendered corpus artifacts
+  (`corpus_artifacts`) built from those rows all survive it. Treat a rollback after a bad publish
+  as containment, and handle the disclosure separately.
 
 ## Trust boundaries
 
@@ -270,10 +295,11 @@ opposite direction -- an owner's render served *to* a foreign reader -- not a fo
 provenance entering an owner's render. Remediation is therefore code **plus** a purge of
 already-primed artifacts.
 
-No cross-tenant shared row exists yet, so there is nothing to leak today -- see "The precondition
-that holds the door shut" below for what that claim actually rests on, which is narrower than a
-reading of the chart templates. This is a design defect with no live exposure, and the reason it is
-still merge-blocking is that the data precondition is exactly what MCAA-286 turns on. The contract's
+*If* no cross-tenant shared row exists, there is nothing to leak today. That is **unverified**: it
+is an inventory claim, stated exactly in "The precondition that holds the door shut" below, and it
+stays conditional until MCAA-286 records the key inventory and a zero-shared-row check. Absent that
+record this is a design defect of unknown live exposure, and it is merge-blocking either way
+because the data precondition is exactly what MCAA-286 turns on. The contract's
 own justification for the field set --
 "the same rows `POST /v1/search { scope: 'shared' }` would return", `corpus-v1.ts` -- is now false
 and must be corrected with the code.
@@ -292,7 +318,9 @@ both shape and subject.
 ## The precondition that holds the door shut (stated exactly)
 
 Both the corpus finding above and the ratification below rest on "no cross-tenant shared row exists
-yet." Earlier revisions of this record stated that as *no manifest mints a `memories:write:shared`
+yet." **That claim is not yet verified.** Nobody has inspected issued keys or the `observations`
+table; it holds as a premise only until MCAA-286 records the inventory and a zero-shared-row check,
+and a reader must not treat it as established before then. Earlier revisions of this record stated that as *no manifest mints a `memories:write:shared`
 key*. That is necessary but not sufficient, and it points a reader at the wrong check:
 `ensureSharedWriteAllowed` returns true for **either** `memories:write:shared` **or** a bare `*`
 (`ServerV1PostgresRoutes.ts:1340`), so a wildcard key issued for some unrelated reason can publish
@@ -466,8 +494,10 @@ migration path. The conditions below exist because deciding now is free and deci
   `SHARED_SCOPE_DOWN_SQL` round trip restores the pre-change shape.
 - `tests/shared/remote-mode.test.ts` -- trigger precedence, including that an under-configured
   legacy `runtime=server` settings file keeps its worker fallback.
-- `tests/shared/remote-mode-no-local-state.test.ts` -- no worker spawn and no local database open
-  in remote mode.
+- `tests/shared/remote-mode-no-local-state.test.ts` -- no worker spawn in remote mode, and the
+  shared opener refuses a create-capable open of `claude-mem.db`. It does not cover read-only opens,
+  other filenames, or opens that bypass `openConfiguredSqliteDatabase`, matching the narrowed
+  guarantee in Decision 1.
 - `.github/workflows/ci.yml` runs the tenant-isolation job against a real Postgres, so the
   isolation guarantee blocks the build. Both suites above must stay named in that job:
   `process-generated-response.test.ts` was gated on `CLAUDE_MEM_TEST_POSTGRES_URL` that no job
