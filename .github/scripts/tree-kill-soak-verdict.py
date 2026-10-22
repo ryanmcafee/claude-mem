@@ -69,6 +69,33 @@ def verdict_of(case: ET.Element) -> str:
     return "pass"
 
 
+def read_survivors(census: Path) -> list[str] | str:
+    """Unexpected survivors a draw's census recorded, or why it is unreadable.
+
+    A draw is not clean just because every test passed: the suite spawns a
+    two-level fixture per test, and for 20/20 green draws of run 36434109032 two
+    of them outlived it with no assertion able to see that. The census writes
+    this file per draw, attributing each surviving PID to the test that created
+    it, so the tally reports the leak rather than leaving it in a log nobody
+    reads. Absent is a failure for the same reason `skipped` is above — it means
+    the check ran zero times.
+    """
+    if not census.is_file():
+        return "no census"
+    try:
+        payload = json.loads(census.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return f"unreadable census ({exc})"
+    survivors = payload.get("survivors")
+    if not isinstance(survivors, list):
+        return "census reported no survivors field"
+    return [
+        f"{entry.get('image')} pid {entry.get('pid')} left by {entry.get('test')!r}"
+        for entry in survivors
+        if isinstance(entry, dict) and not entry.get("allowed")
+    ]
+
+
 def read_draw(report: Path) -> dict[str, str] | str:
     """Map every suite test name -> verdict, or return why the draw is unreadable."""
     if not report.is_file():
@@ -90,9 +117,14 @@ def main() -> int:
         sys.exit(f"usage: {sys.argv[0]} <artifact-root>")
     root = Path(sys.argv[1])
 
+    draws = expected_draws()
     reads = {
         draw: read_draw(root / f"tree-kill-soak-draw-{draw}" / "junit.xml")
-        for draw in expected_draws()
+        for draw in draws
+    }
+    censuses = {
+        draw: read_survivors(root / f"tree-kill-soak-draw-{draw}" / "survivors.json")
+        for draw in draws
     }
     usable = {draw: row for draw, row in reads.items() if isinstance(row, dict)}
     required = required_tests()
@@ -116,6 +148,12 @@ def main() -> int:
         )
         adverse.extend(f"draw {draw}: {name} -> {row[name]}" for name in sorted(row) if row[name] != "pass")
 
+    for draw, census in sorted(censuses.items()):
+        if isinstance(census, str):
+            adverse.append(f"draw {draw}: {census}")
+            continue
+        adverse.extend(f"draw {draw}: process survived the suite -> {entry}" for entry in census)
+
     lines = ["## Windows tree-kill soak", ""]
     if not names:
         lines.extend([f"No draw reported a test for `{SUITE}`.", ""])
@@ -131,6 +169,20 @@ def main() -> int:
             got = row if isinstance(row, str) else row.get(name, "absent")
             lines.append(f"| {draw} | {got} |")
         lines.append("")
+
+    clean = sum(1 for census in censuses.values() if census == [])
+    lines.extend([
+        "### processes surviving the suite",
+        "",
+        f"**{clean}/{len(censuses)} draws left nothing running**",
+        "",
+        "| draw | survivors |",
+        "| --- | --- |",
+    ])
+    for draw, census in sorted(censuses.items()):
+        got = census if isinstance(census, str) else "; ".join(census) or "none"
+        lines.append(f"| {draw} | {got} |")
+    lines.append("")
 
     report = "\n".join(lines)
     print(report)
