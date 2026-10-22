@@ -121,6 +121,63 @@ export const CorpusFilterSchema = z.object({
 }).strict();
 export type CorpusFilter = z.infer<typeof CorpusFilterSchema>;
 
+/**
+ * Filter fields that test an attribute a projected member row does not carry.
+ * `kinds`, `query` and the date bounds test `kind`, `content` and
+ * `createdAtEpoch`, which a non-owner receives anyway, so they disclose nothing
+ * new. These two do not: `metadataMatch` tests `metadata` and `platformSource`
+ * tests the originating session, and both are withheld from a projected row.
+ */
+export const CORPUS_OWNER_ONLY_FILTER_FIELDS = ['metadataMatch', 'platformSource'] as const;
+
+/**
+ * Which owner-only fields this filter would actually evaluate. Emptiness follows
+ * the SQL exactly -- an absent `metadataMatch`, `{}`, or a null `platformSource`
+ * emits no clause and so tests nothing -- because selection, counting and this
+ * gate have to agree on the rule or the counts answer what the gate refused
+ * (ADR 0002 condition 14).
+ */
+export function ownerOnlyFilterFields(filter: CorpusFilter): string[] {
+  const fields: string[] = [];
+  if (filter.metadataMatch && Object.keys(filter.metadataMatch).length > 0) {
+    fields.push('metadataMatch');
+  }
+  if (typeof filter.platformSource === 'string' && filter.platformSource.length > 0) {
+    fields.push('platformSource');
+  }
+  return fields;
+}
+
+/**
+ * The one wording of the refusal, shared by the schema and the service gate so a
+ * client reading the contract and a client reading the 400 learn the same rule.
+ */
+export function ownerOnlyFilterRefusal(fields: readonly string[]): string {
+  return `A shared-scope corpus cannot filter on ${fields.join(' or ')}. `
+    + 'That scope selects other tenants\' shared observations, whose '
+    + `${fields.join(' and ')} you never receive, so the member count would reveal them. `
+    + 'Drop the field, or use scope "project" to filter your own observations on it.';
+}
+
+/**
+ * A filter a client may submit. Structurally `CorpusFilterSchema` plus the rule
+ * the server enforces anyway (ADR 0002 condition 22): an SDK generated from the
+ * contract should refuse the combination rather than learn it from a runtime
+ * 400. The service gate stays the authority, because a filter stored before the
+ * gate reaches selection without passing through here.
+ *
+ * `CorpusFilterSchema` itself stays structural on purpose -- it also parses
+ * stored filters and serializes an owner's `filter` back out, and a corpus built
+ * before the gate must still be readable and deletable.
+ */
+export const ProjectableCorpusFilterSchema = CorpusFilterSchema.superRefine((filter, ctx) => {
+  if (filter.scope !== 'shared') return;
+  const fields = ownerOnlyFilterFields(filter);
+  for (const field of fields) {
+    ctx.addIssue({ code: 'custom', path: [field], message: ownerOnlyFilterRefusal(fields) });
+  }
+});
+
 export const CorpusNameSchema = z.string().min(1).regex(CORPUS_NAME_PATTERN, CORPUS_NAME_ERROR);
 
 /**
@@ -169,7 +226,7 @@ export function isArtifactServable(
 export const BuildCorpusRequestSchema = z.object({
   name: CorpusNameSchema,
   description: z.string().max(2000).optional(),
-  filter: CorpusFilterSchema.optional(),
+  filter: ProjectableCorpusFilterSchema.optional(),
   /** Publish cross-tenant. Requires SHARED_WRITE_SCOPE and shared-only members. */
   shared: z.boolean().optional(),
 }).strict();
@@ -238,17 +295,32 @@ export const CorpusStatsSchema = z.object({
   latestAtEpoch: z.number().int().nonnegative().nullable(),
 }).strict();
 
-export const CorpusSummarySchema = z.object({
+/**
+ * Corpus-level fields a projected corpus row must never carry. `projectId` is
+ * the owner's provenance; `filter` and `filterDigest` describe how the owner
+ * selected members, which is a statement about their private corpus even when
+ * every member is publishable.
+ */
+export const CORPUS_PROVENANCE_FIELDS = [
+  'projectId',
+  'filter',
+  'filterDigest',
+] as const;
+
+/** Fields every corpus row carries, whoever is reading it. */
+const CorpusBaseSchema = z.object({
   id: z.string().min(1),
-  projectId: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
   shared: z.boolean(),
   memberScope: CorpusScopeSchema,
-  /** True when the row belongs to another tenant and is visible via scope=shared. */
+  /**
+   * True when the row belongs to another tenant and is visible via scope=shared.
+   * A read-time fact about the corpus, reported so a reader can tell provenance.
+   * It is not the input to any projection decision (ADR D9, condition 10).
+   */
   foreign: z.boolean(),
   stats: CorpusStatsSchema,
-  filterDigest: z.string().min(1),
   contentDigest: z.string().min(1).nullable(),
   /**
    * Always null on the remote server: there is no resumable AI session to
@@ -260,30 +332,97 @@ export const CorpusSummarySchema = z.object({
   primedAtEpoch: z.number().int().nonnegative().nullable(),
   createdAtEpoch: z.number().int().nonnegative(),
   updatedAtEpoch: z.number().int().nonnegative(),
+});
+
+/**
+ * A corpus the reader owns. Provenance is required here, which is what makes
+ * this variant mutually exclusive with the projected one -- optional fields
+ * could not, because an over-sharing projected corpus would still validate.
+ */
+export const CorpusOwnerSummarySchema = CorpusBaseSchema.extend({
+  projectId: z.string().min(1),
+  filterDigest: z.string().min(1),
 }).strict();
+export type CorpusOwnerSummary = z.infer<typeof CorpusOwnerSummarySchema>;
+
+/** A corpus reached through the shared branch: content handles, no provenance. */
+export const CorpusProjectedSummarySchema = CorpusBaseSchema.strict();
+export type CorpusProjectedSummary = z.infer<typeof CorpusProjectedSummarySchema>;
+
+export const CorpusSummarySchema = z.union([
+  CorpusOwnerSummarySchema,
+  CorpusProjectedSummarySchema,
+]);
 export type CorpusSummary = z.infer<typeof CorpusSummarySchema>;
 
 /**
- * Member rows, returned only for `?include=sources`. Safe on a foreign shared
- * corpus because a shared corpus may only contain already-shared observations
- * (ADR D3) -- the same rows POST /v1/search { scope: 'shared' } would return.
+ * Provenance a projected member row must never carry. The projected schema
+ * rejects each of these by omitting it from a strict shape, so the list and the
+ * schema cannot drift apart.
  */
-export const CorpusSourceSchema = z.object({
+export const CORPUS_SOURCE_PROVENANCE_FIELDS = [
+  'projectId',
+  'teamId',
+  'serverSessionId',
+  'metadata',
+] as const;
+
+/** Fields every member row carries, whoever is reading it. */
+const CorpusSourceBaseSchema = z.object({
   id: z.string().min(1),
-  projectId: z.string().min(1),
   kind: z.string().min(1),
   content: z.string(),
-  metadata: z.record(z.string(), z.unknown()),
   shared: z.boolean(),
   /** Render index, derived from CORPUS_MEMBER_ORDER at read time, not stored. */
   position: z.number().int().nonnegative(),
   createdAtEpoch: z.number().int().nonnegative(),
+});
+
+/**
+ * A member the reader is authorized to see whole: the observation's own team
+ * AND its own project match the authenticated read. Provenance is required
+ * here, which is what makes this variant mutually exclusive with the projected
+ * one -- an optional field would let an over-sharing projected row validate.
+ */
+export const CorpusOwnerSourceSchema = CorpusSourceBaseSchema.extend({
+  /** Caller-supplied text, usually a repo or directory name. */
+  projectId: z.string().min(1),
+  /** Publisher-controlled JSON, stamped with the publishing agent's id. */
+  metadata: z.record(z.string(), z.unknown()),
 }).strict();
 
-export const CorpusDetailSchema = CorpusSummarySchema.extend({
+/**
+ * A member reached through the shared branch. A shared corpus may only contain
+ * already-shared observations (ADR D3), so the content is publishable -- but
+ * publishing shares content, not provenance, and ownership is decided per
+ * member against the reader, never once per corpus (ADR D9).
+ */
+export const CorpusProjectedSourceSchema = CorpusSourceBaseSchema.strict();
+
+export const CorpusSourceSchema = z.union([
+  CorpusOwnerSourceSchema,
+  CorpusProjectedSourceSchema,
+]);
+
+export const CorpusOwnerDetailSchema = CorpusOwnerSummarySchema.extend({
   filter: CorpusFilterSchema,
   sources: z.array(CorpusSourceSchema).optional(),
 }).strict();
+
+/**
+ * A projected corpus omits the owner's selection as well as their project id, so
+ * a condition-13 response is representable rather than failing its own schema.
+ * Its members can only be projected rows: an owner member row inside a corpus the
+ * reader does not own is the disclosure this variant exists to make unstateable.
+ */
+export const CorpusProjectedDetailSchema = CorpusProjectedSummarySchema.extend({
+  sources: z.array(CorpusProjectedSourceSchema).optional(),
+}).strict();
+
+export const CorpusDetailSchema = z.union([
+  CorpusOwnerDetailSchema,
+  CorpusProjectedDetailSchema,
+]);
 
 export const BuildCorpusResponseSchema = z.object({ corpus: CorpusDetailSchema }).strict();
 export const ListCorporaResponseSchema = z.object({
@@ -327,6 +466,48 @@ export const CORPUS_ERRORS = {
   sharedPrivateMembers: { status: 422, error: 'SharedCorpusPrivateMembers' },
   internal: { status: 500, error: 'InternalError' },
 } as const;
+
+/** Zod's issue shape structurally, so a caller passes `error.issues` without retyping it. */
+export interface CorpusValidationIssue {
+  readonly message: string;
+  readonly path?: readonly PropertyKey[];
+}
+
+/**
+ * A 400 from schema parsing has to read like the 400 the service gate throws:
+ * both refuse the same combinations, and a client that learned the rule from
+ * `message` on one path found the field undefined on the other. `issues` stays
+ * for a client that wants the field path programmatically.
+ */
+export const CorpusValidationErrorSchema = z.object({
+  error: z.literal('ValidationError'),
+  message: z.string().min(1),
+  issues: z.array(z.unknown()),
+}).strict();
+
+export function corpusValidationErrorBody(issues: readonly CorpusValidationIssue[]): {
+  error: 'ValidationError';
+  message: string;
+  issues: readonly CorpusValidationIssue[];
+} {
+  // Grouped by text, because one refusal that names several fields raises an
+  // issue per field and would otherwise repeat its whole paragraph per field.
+  const pathsByText = new Map<string, string[]>();
+  for (const issue of issues) {
+    const path = (issue.path ?? []).map(String).join('.');
+    const paths = pathsByText.get(issue.message) ?? [];
+    pathsByText.set(issue.message, path.length > 0 ? [...paths, path] : paths);
+  }
+
+  const message = [...pathsByText]
+    .map(([text, paths]) => (paths.length > 0 ? `${paths.join(', ')}: ${text}` : text))
+    .join(' ');
+  return {
+    error: CORPUS_ERRORS.validation.error,
+    message: message.length > 0 ? message : 'Request failed validation',
+    issues,
+  };
+}
 
 /**
  * Which ceiling a CorpusTooLarge hit, so the client knows whether to narrow the
@@ -453,10 +634,10 @@ export const CORPUS_MCP_TOOLS = [
         description: { type: 'string', description: 'What this corpus is about.' },
         kinds: { type: 'array', items: { type: 'string' }, description: 'Observation kinds to include.' },
         query: { type: 'string', description: 'Full-text filter over observation content.' },
-        platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor.' },
+        platformSource: { type: 'string', description: 'Optional platform source filter, e.g. claude, codex, cursor. Not available with scope "shared".' },
         dateStartEpoch: { type: 'integer', description: 'Include observations created at or after this epoch-ms.' },
         dateEndEpoch: { type: 'integer', description: 'Include observations created at or before this epoch-ms.' },
-        metadataMatch: { type: 'object', additionalProperties: true, description: 'Metadata keys the observation must contain.' },
+        metadataMatch: { type: 'object', additionalProperties: true, description: 'Metadata keys the observation must contain. Not available with scope "shared".' },
         limit: {
           type: 'integer',
           minimum: 1,
