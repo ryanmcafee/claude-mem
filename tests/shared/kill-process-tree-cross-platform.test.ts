@@ -125,8 +125,17 @@ describe('killProcessTree end-to-end on this platform', () => {
     await settle();
     const pid = root.pid!;
 
+    const descendants = await collectDescendantIdentities(pid);
+    expect(descendants.length).toBeGreaterThan(0);
+    const childPid = descendants[0]!.pid;
+
     await killProcessTree(pid);
     expect(await waitUntil(() => !isPidAlive(pid), 20_000)).toBe(true);
+    // The first call took a LIVE two-level tree, so the descendant is as much
+    // its responsibility as the root. Asserting only the root let this test
+    // pass against the orphan defect the reap above exists to fix, and left a
+    // surviving `ping` behind on every green Windows draw of the soak.
+    expect(await waitUntil(() => !isPidAlive(childPid), 20_000)).toBe(true);
 
     // Second call against the corpse must resolve, not reject.
     await killProcessTree(pid);
