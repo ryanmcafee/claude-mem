@@ -28,6 +28,18 @@ export function findGate(env: string): TestGate | undefined {
   return TEST_GATES.find((gate) => gate.env === env);
 }
 
+/**
+ * Gates a suite reads, from its source alone, so a file can be classified at a
+ * git revision that is not checked out.
+ */
+export function gatesInSource(source: string): string[] {
+  const gates = new Set<string>();
+  for (const match of source.matchAll(GATE_ENV_PATTERN)) {
+    gates.add(match[1]);
+  }
+  return [...gates].sort();
+}
+
 function walk(dir: string, acc: string[]): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
@@ -57,15 +69,11 @@ export function discoverGatedSuites(repoRoot: string): GatedSuite[] {
   const suites: GatedSuite[] = [];
 
   for (const absolute of walk(testsRoot, []).sort()) {
-    const source = readFileSync(absolute, 'utf8');
-    const gates = new Set<string>();
-    for (const match of source.matchAll(GATE_ENV_PATTERN)) {
-      gates.add(match[1]);
-    }
-    if (gates.size === 0) continue;
+    const gates = gatesInSource(readFileSync(absolute, 'utf8'));
+    if (gates.length === 0) continue;
     suites.push({
       file: path.relative(repoRoot, absolute).split(path.sep).join('/'),
-      gates: [...gates].sort(),
+      gates,
     });
   }
 
