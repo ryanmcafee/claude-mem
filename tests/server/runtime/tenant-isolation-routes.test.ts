@@ -8,11 +8,18 @@
 // scope is the ONE opt-in that crosses tenants, and publishing into it needs its
 // own grant.
 //
+// MCAA-281 extends this with the field-level half of the same guarantee: a row
+// the caller reached through the shared branch carries the published content and
+// nothing about who published it — no project id, session id, team id, or
+// publisher-controlled metadata, on REST or MCP.
+//
 // Requires a real Postgres (CLAUDE_MEM_TEST_POSTGRES_URL) — the isolation lives
 // in SQL WHERE clauses, so a fake pool would prove nothing.
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import pg from 'pg';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Server } from '../../../src/services/server/Server.js';
 import { ServerV1PostgresRoutes } from '../../../src/server/routes/v1/ServerV1PostgresRoutes.js';
 import {
@@ -27,10 +34,34 @@ import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
+// Cross-tenant rows come back projected, so every provenance field is optional
+// on the wire. The tests assert on their absence, which is the point.
+interface WireObservation {
+  id: string;
+  content: string;
+  kind: string;
+  shared: boolean;
+  sharedOrigin?: string;
+  teamId?: string;
+  projectId?: string;
+  serverSessionId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
 interface SearchResponse {
-  observations: Array<{ id: string; content: string; teamId: string; shared: boolean }>;
+  observations: WireObservation[];
   context?: string;
 }
+
+// Publisher-controlled metadata a projected row must not carry back out.
+// `agentId` is what the hook write path injects (services/hooks/server-client.ts);
+// the nested marker proves the projection drops the whole object, not top-level keys.
+const PUBLISHER_AGENT_ID = 'agent-acme-curator-7';
+const NESTED_MARKER = 'acme-nested-provenance-marker';
+const PUBLISHER_METADATA = {
+  agentId: PUBLISHER_AGENT_ID,
+  origin: { marker: NESTED_MARKER, projectId: 'acme-internal-pki' },
+};
 
 describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
   if (!testDatabaseUrl) {
@@ -46,11 +77,19 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
   let port: number;
 
   // Two tenants that must never see each other. Both use the SAME project name
-  // so the test cannot pass by accident just because project ids differ.
+  // so the test cannot pass by accident just because project names differ.
+  // `projects.id` is caller-supplied TEXT — in practice a repository or
+  // directory name — so the ids are the real thing a leak would expose.
+  const PROJECT_A_ID = 'acme-internal-pki';
+  const PROJECT_A2_ID = 'acme-payments';
+  const PROJECT_B_ID = 'bravo-web';
   let teamAId: string;
   let teamBId: string;
   let projectAId: string;
   let projectBId: string;
+  // A second project inside tenant A: a row published from here is same-team but
+  // outside the queried project scope, so it is only reachable via the shared branch.
+  let projectA2Id: string;
   let keyA: string;
   let keyB: string;
   // Tenant A also gets a key WITH the shared-write grant, to separate "may
@@ -77,6 +116,48 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
     return { status: response.status, json };
   }
 
+  // The MCP recall tools read the same rows as REST, so they get the same
+  // redaction assertions. Driven with the real MCP client over streamable HTTP.
+  async function callMcpTool(
+    key: string,
+    name: 'search' | 'context' | 'recent',
+    args: Record<string, unknown>,
+  ): Promise<{ raw: string; observations: WireObservation[]; context?: string }> {
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/v1/mcp`),
+      { requestInit: { headers: { Authorization: `Bearer ${key}` } } },
+    );
+    const mcp = new McpClient({ name: 'tenant-isolation-test', version: '0' }, { capabilities: {} });
+    await mcp.connect(transport);
+    try {
+      const result = await mcp.callTool({ name, arguments: args });
+      const raw = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
+      const parsed = JSON.parse(raw) as { observations: WireObservation[]; context?: string };
+      return { raw, observations: parsed.observations, context: parsed.context };
+    } finally {
+      await mcp.close();
+    }
+  }
+
+  // Provenance a row tenant B reached through the shared branch must never
+  // carry, on any surface. `projected` is the subset of the response that came
+  // from tenant A; `rawBody` is the whole serialized response, so a leak through
+  // a nested or renamed field fails here too.
+  function expectTenantAProvenanceRedacted(rawBody: string, projected: WireObservation[]): void {
+    expect(projected.length).toBeGreaterThan(0);
+    for (const secret of [PROJECT_A_ID, PROJECT_A2_ID, teamAId, PUBLISHER_AGENT_ID, NESTED_MARKER]) {
+      expect(rawBody).not.toContain(secret);
+    }
+    for (const observation of projected) {
+      expect(observation.projectId).toBeUndefined();
+      expect(observation.teamId).toBeUndefined();
+      expect(observation.serverSessionId).toBeUndefined();
+      expect(observation.metadata).toBeUndefined();
+      expect(observation.sharedOrigin).toBeString();
+      expect(observation.shared).toBe(true);
+    }
+  }
+
   beforeEach(async () => {
     loggerSpies = [
       spyOn(logger, 'info').mockImplementation(() => {}),
@@ -99,9 +180,11 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
     const teamB = await storage.teams.create({ name: 'tenant-b' });
     teamAId = teamA.id;
     teamBId = teamB.id;
-    const projectA = await storage.projects.create({ teamId: teamAId, name: 'homelab' });
-    const projectB = await storage.projects.create({ teamId: teamBId, name: 'homelab' });
+    const projectA = await storage.projects.create({ id: PROJECT_A_ID, teamId: teamAId, name: 'homelab' });
+    const projectA2 = await storage.projects.create({ id: PROJECT_A2_ID, teamId: teamAId, name: 'homelab' });
+    const projectB = await storage.projects.create({ id: PROJECT_B_ID, teamId: teamBId, name: 'homelab' });
     projectAId = projectA.id;
+    projectA2Id = projectA2.id;
     projectBId = projectB.id;
 
     const materialA = newApiKey();
@@ -270,15 +353,21 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
     });
     expect(defaultScope.json.observations.map(o => o.teamId)).toEqual([teamBId]);
 
-    // Opt in: tenant B now also sees tenant A's published row.
+    // Opt in: tenant B now also sees tenant A's published row — as content plus
+    // an opaque origin token, while its own row keeps full fidelity.
     const sharedScope = await post<SearchResponse>('/v1/search', keyB, {
       projectId: projectBId,
       query: 'shared knowledge',
       scope: 'shared',
     });
-    const teams = sharedScope.json.observations.map(o => o.teamId).sort();
-    expect(teams).toEqual([teamAId, teamBId].sort());
-    expect(sharedScope.json.observations.some(o => o.shared)).toBe(true);
+    expect(sharedScope.json.observations).toHaveLength(2);
+    const own = sharedScope.json.observations.filter(o => o.teamId === teamBId);
+    const projected = sharedScope.json.observations.filter(o => o.teamId === undefined);
+    expect(own).toHaveLength(1);
+    expect(own[0]!.projectId).toBe(projectBId);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]!.content).toContain('previous ArgoCD revision');
+    expect(projected[0]!.shared).toBe(true);
   });
 
   it('does not leak a tenant\'s private rows through the shared scope', async () => {
@@ -375,5 +464,228 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
       scope: 'shared',
     });
     expect(sharedScope.json.observations).toEqual([]);
+  });
+
+  // MCAA-281 — the projection. Publishing content is not publishing provenance,
+  // so every shared read surface reduces a foreign row to content + an opaque
+  // origin token. Each of these fails against the pre-MCAA-281 serializer.
+  describe('MCAA-281 — shared reads carry no publisher provenance', () => {
+    // The scenario from the review: a curator publishes a runbook from a project
+    // whose id is a repository name, with the write path's injected agentId and
+    // nested provenance in metadata.
+    async function publishRunbook(): Promise<string> {
+      const published = await post<{ memory: { id: string } }>('/v1/memories', keyAPublisher, {
+        projectId: projectAId,
+        content: 'shared runbook: rotate the intermediate CA before the leaf expires',
+        metadata: PUBLISHER_METADATA,
+        shared: true,
+      });
+      expect(published.status).toBe(201);
+      return published.json.memory.id;
+    }
+
+    it('redacts the publisher on REST /v1/search', async () => {
+      const sharedId = await publishRunbook();
+      const read = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+      });
+      expect(read.status).toBe(200);
+      expect(read.json.observations.map(o => o.id)).toEqual([sharedId]);
+      expectTenantAProvenanceRedacted(JSON.stringify(read.json), read.json.observations);
+    });
+
+    it('redacts the publisher on REST /v1/context, including the packed context string', async () => {
+      await publishRunbook();
+      const read = await post<SearchResponse>('/v1/context', keyB, {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+      });
+      expect(read.status).toBe(200);
+      expectTenantAProvenanceRedacted(JSON.stringify(read.json), read.json.observations);
+      // The content itself is the point of publishing, so it still packs.
+      expect(read.json.context).toContain('rotate the intermediate CA');
+    });
+
+    for (const tool of ['search', 'context'] as const) {
+      it(`redacts the publisher on the MCP ${tool} tool`, async () => {
+        const sharedId = await publishRunbook();
+        const result = await callMcpTool(keyB, tool, {
+          projectId: projectBId,
+          query: 'intermediate CA',
+          scope: 'shared',
+        });
+        expect(result.observations.map(o => o.id)).toEqual([sharedId]);
+        expectTenantAProvenanceRedacted(result.raw, result.observations);
+      });
+    }
+
+    it('redacts the publisher on the MCP recent tool', async () => {
+      const sharedId = await publishRunbook();
+      const result = await callMcpTool(keyB, 'recent', {
+        projectId: projectBId,
+        limit: 20,
+        scope: 'shared',
+      });
+      expect(result.observations.map(o => o.id)).toEqual([sharedId]);
+      expectTenantAProvenanceRedacted(result.raw, result.observations);
+    });
+
+    it('projects a same-team shared row published outside the queried project', async () => {
+      // Same tenant, different project. `scope: "shared"` is server-global, so the
+      // project predicate does not constrain it — the row arrives through the
+      // shared branch and gets the shared projection, not the owner view.
+      const published = await post<{ memory: { id: string } }>('/v1/memories', keyAPublisher, {
+        projectId: projectA2Id,
+        content: 'shared note: the payments service rotates its own signing keys',
+        metadata: PUBLISHER_METADATA,
+        shared: true,
+      });
+      expect(published.status).toBe(201);
+
+      const read = await post<SearchResponse>('/v1/search', keyA, {
+        projectId: projectAId,
+        query: 'signing keys',
+        scope: 'shared',
+      });
+      expect(read.status).toBe(200);
+      expect(read.json.observations.map(o => o.id)).toEqual([published.json.memory.id]);
+      const [projected] = read.json.observations;
+      expect(projected!.projectId).toBeUndefined();
+      expect(projected!.serverSessionId).toBeUndefined();
+      expect(projected!.teamId).toBeUndefined();
+      expect(projected!.metadata).toBeUndefined();
+      expect(projected!.sharedOrigin).toBeString();
+      const body = JSON.stringify(read.json);
+      expect(body).not.toContain(PROJECT_A2_ID);
+      expect(body).not.toContain(PUBLISHER_AGENT_ID);
+      expect(body).not.toContain(NESTED_MARKER);
+
+      // Read from its own project, the very same row is the owner's view.
+      const ownerRead = await post<SearchResponse>('/v1/search', keyA, {
+        projectId: projectA2Id,
+        query: 'signing keys',
+      });
+      expect(ownerRead.json.observations[0]!.projectId).toBe(projectA2Id);
+      expect(ownerRead.json.observations[0]!.metadata).toMatchObject(PUBLISHER_METADATA);
+    });
+
+    // Negative control: this passes with or without the projection, by design.
+    // It guards against over-redaction, not against the leak.
+    it('keeps the owner\'s own shared row at full fidelity', async () => {
+      const sharedId = await publishRunbook();
+      const ownerRead = await post<SearchResponse>('/v1/search', keyA, {
+        projectId: projectAId,
+        query: 'intermediate CA',
+      });
+      expect(ownerRead.json.observations.map(o => o.id)).toEqual([sharedId]);
+      const [own] = ownerRead.json.observations;
+      expect(own!.projectId).toBe(projectAId);
+      expect(own!.teamId).toBe(teamAId);
+      expect(own!.metadata).toMatchObject(PUBLISHER_METADATA);
+      expect(own!.sharedOrigin).toBeUndefined();
+    });
+
+    it('does not widen an MCP read through an omitted, invalid or forged scope', async () => {
+      await publishRunbook();
+      // 'shared' is the only value that widens; anything else narrows to the
+      // caller's own tenant, and identity fields in the arguments are ignored
+      // because the team binding comes from the API key.
+      const narrowing: Array<Record<string, unknown>> = [
+        {},
+        { scope: 'all' },
+        { scope: 'SHARED' },
+        { scope: '*' },
+        { scope: null },
+        { scope: 'project', teamId: teamAId, projectId: projectBId },
+        { scope: 'project', serverSessionId: 'forged', shared: true },
+      ];
+      for (const extra of narrowing) {
+        const result = await callMcpTool(keyB, 'search', {
+          projectId: projectBId,
+          query: 'intermediate CA',
+          ...extra,
+        });
+        expect(result.observations).toEqual([]);
+        expect(result.raw).not.toContain(PROJECT_A_ID);
+      }
+
+      // The one value that DOES widen still hands back a projected row, so the
+      // assertions above are about narrowing rather than about an empty result set.
+      const widened = await callMcpTool(keyB, 'search', {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+      });
+      expectTenantAProvenanceRedacted(widened.raw, widened.observations);
+    });
+
+    it('does not turn a forged projectId into ownership of a shared row', async () => {
+      // The projection's owner test uses the queried projectId, and a team-scoped
+      // key may name any project. Naming the publisher's project must not promote
+      // the caller to the owner view — the team comparison is what stops it.
+      await publishRunbook();
+      const forged = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: PROJECT_A_ID,
+        query: 'intermediate CA',
+        scope: 'shared',
+        teamId: teamAId,
+        serverSessionId: 'forged',
+        shared: true,
+      });
+      expect(forged.status).toBe(200);
+      // The row is reachable (it is published), but only as a projected row.
+      expect(forged.json.observations).toHaveLength(1);
+      for (const observation of forged.json.observations) {
+        expect(observation.projectId).toBeUndefined();
+        expect(observation.teamId).toBeUndefined();
+        expect(observation.serverSessionId).toBeUndefined();
+        expect(observation.metadata).toBeUndefined();
+      }
+      expect(JSON.stringify(forged.json)).not.toContain(PUBLISHER_AGENT_ID);
+      expect(JSON.stringify(forged.json)).not.toContain(NESTED_MARKER);
+    });
+
+    it('does not widen a REST read through forged identity fields in the body', async () => {
+      await publishRunbook();
+      const forged = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        teamId: teamAId,
+        serverSessionId: 'forged',
+        shared: true,
+      });
+      expect(forged.status).toBe(200);
+      expect(forged.json.observations).toEqual([]);
+
+      // Same request with the real opt-in: reachable, and still projected.
+      const optedIn = await post<SearchResponse>('/v1/search', keyB, {
+        projectId: projectBId,
+        query: 'intermediate CA',
+        scope: 'shared',
+        teamId: teamAId,
+        shared: true,
+      });
+      expectTenantAProvenanceRedacted(JSON.stringify(optedIn.json), optedIn.json.observations);
+    });
+
+    it('records the shared flag on the publish audit entry', async () => {
+      const sharedId = await publishRunbook();
+      const privateWrite = await post<{ memory: { id: string } }>('/v1/memories', keyAPublisher, {
+        projectId: projectAId,
+        content: 'alpha keeps this one to itself',
+      });
+
+      const audit = await client.query<{ resource_id: string; details: { shared?: boolean } }>(
+        `SELECT resource_id, details FROM audit_log
+         WHERE team_id = $1 AND action = 'memory.write' ORDER BY created_at ASC`,
+        [teamAId],
+      );
+      const bySharedFlag = new Map(audit.rows.map(r => [r.resource_id, r.details?.shared]));
+      expect(bySharedFlag.get(sharedId)).toBe(true);
+      expect(bySharedFlag.get(privateWrite.json.memory.id)).toBe(false);
+    });
   });
 });

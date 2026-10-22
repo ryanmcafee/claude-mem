@@ -361,6 +361,9 @@ async function persistGeneratedObservations(
           sourceAdapter: input.sourceAdapter ?? null,
           parsedObservationIndex: index,
           kind,
+          // MCAA-281 — generated observations are never published to the shared
+          // scope; recording it keeps the audit log uniformly queryable.
+          shared: observation.shared === true,
         },
       };
       try {

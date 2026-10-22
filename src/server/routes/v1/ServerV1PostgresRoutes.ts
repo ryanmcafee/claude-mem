@@ -34,6 +34,11 @@ import { PostgresServerSessionsRepository } from '../../../storage/postgres/serv
 import { IngestEventsService, type EnqueueOutcome } from '../../services/IngestEventsService.js';
 import { EndSessionService } from '../../services/EndSessionService.js';
 import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../../shared/platform-source.js';
+import {
+  serializeObservation,
+  serializeObservationForViewer,
+  type ObservationViewer,
+} from './observation-projection.js';
 
 const SOURCE_ADAPTER_DEFAULT = 'api';
 
@@ -926,7 +931,11 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
           const observation = await repo.create(createInput);
-          await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
+          // `shared` makes "who published what to every tenant" answerable from
+          // the audit log alone, instead of only by reading the rows back.
+          await this.auditWrite(req, 'memory.write', observation.id, observation.projectId, {
+            shared: observation.shared === true,
+          });
           res.status(201).json({ memory: serializeObservation(observation) });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -954,6 +963,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
         const scope = body.scope ?? 'project';
+        const viewer: ObservationViewer = { teamId, projectId: body.projectId };
         let results;
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
@@ -981,7 +991,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           observationIds: results.map(o => o.id),
         });
         res.status(200).json({
-          observations: results.map(serializeObservation),
+          observations: results.map(o => serializeObservationForViewer(o, viewer)),
         });
       },
     ));
@@ -1004,6 +1014,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
         const scope = body.scope ?? 'project';
+        const viewer: ObservationViewer = { teamId, projectId: body.projectId };
         let results;
         try {
           const repo = new PostgresObservationRepository(this.options.pool);
@@ -1021,9 +1032,12 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           this.handleDbError(err, res, 'observation.context');
           return;
         }
-        const context = results
+        // Pack from the projected rows, so the context string can never carry a
+        // field the projection dropped from `observations`.
+        const observations = results.map(o => serializeObservationForViewer(o, viewer));
+        const context = observations
           .map(observation => observation.content)
-          .filter(text => typeof text === 'string' && text.length > 0)
+          .filter((text): text is string => typeof text === 'string' && text.length > 0)
           .join('\n\n');
         await this.auditWrite(req, 'observation.read', null, body.projectId, {
           mode: 'context',
@@ -1035,7 +1049,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           observationIds: results.map(o => o.id),
         });
         res.status(200).json({
-          observations: results.map(serializeObservation),
+          observations,
           context,
         });
       },
@@ -1058,6 +1072,8 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           throw new Error('API key is scoped to a different project');
         }
       };
+      // Same projection as REST: a row the tool reached through the shared
+      // branch is redacted here too, so a pasted MCP link is not a way around it.
       const backend: RecallBackend = {
         search: async ({ projectId, query, limit, scope }) => {
           assertProjectAllowed(projectId);
@@ -1067,7 +1083,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             mode: 'search', via: 'mcp', query, limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
-          return rows.map(serializeObservation);
+          return rows.map(o => serializeObservationForViewer(o, { teamId, projectId }));
         },
         context: async ({ projectId, query, limit, scope }) => {
           assertProjectAllowed(projectId);
@@ -1076,7 +1092,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             mode: 'context', via: 'mcp', query, limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
-          return rows.map(serializeObservation);
+          return rows.map(o => serializeObservationForViewer(o, { teamId, projectId }));
         },
         recent: async ({ projectId, limit, scope }) => {
           assertProjectAllowed(projectId);
@@ -1085,7 +1101,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             mode: 'recent', via: 'mcp', limit, scope,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
           });
-          return rows.map(serializeObservation);
+          return rows.map(o => serializeObservationForViewer(o, { teamId, projectId }));
         },
       };
       const server = createRecallMcpServer(backend, MCP_SERVER_VERSION);
@@ -2044,32 +2060,6 @@ function serializeEvent(event: PostgresAgentEvent): Record<string, unknown> {
     occurredAtEpoch: event.occurredAtEpoch,
     receivedAtEpoch: event.receivedAtEpoch,
     createdAtEpoch: event.createdAtEpoch,
-  };
-}
-
-function serializeObservation(observation: {
-  id: string;
-  projectId: string;
-  teamId: string;
-  serverSessionId: string | null;
-  kind: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  shared?: boolean;
-  createdAtEpoch: number;
-  updatedAtEpoch: number;
-}): Record<string, unknown> {
-  return {
-    id: observation.id,
-    projectId: observation.projectId,
-    teamId: observation.teamId,
-    serverSessionId: observation.serverSessionId,
-    kind: observation.kind,
-    content: observation.content,
-    metadata: observation.metadata,
-    shared: observation.shared === true,
-    createdAtEpoch: observation.createdAtEpoch,
-    updatedAtEpoch: observation.updatedAtEpoch,
   };
 }
 
