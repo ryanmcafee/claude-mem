@@ -22,6 +22,11 @@ Conventions:
   reader to verify a figure their tool reports differently, which reads as a discrepancy and is not
   one. Titles are what the `dropped-test guard (gated suites)` job compares, so they are also what
   the machine will hold you to.
+- A blanket waiver is not a declaration. Where a record names a test the decision owns, only a
+  per-item declaration that repeats that test's title may waive its removal -- never a
+  pull-request-wide switch such as the `tests-removed` label, which suppresses every removal in the
+  pull request and names none of them. Otherwise the escape hatch is wider than the rule: one
+  intended removal buys silence on every unintended one, and the reviewer sees nothing to check.
 - This index carries the title and the status, never a revision number and never the state of a
   branch that has not merged. A revision belongs in its own record's header, and a branch state is
   true for hours: an index row that pins either is wrong at the next amendment or the next push,
