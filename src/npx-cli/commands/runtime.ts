@@ -159,6 +159,12 @@ export function runCleanupCommand(extraArgs: string[] = []): void {
   spawnBunWorkerCommand('cleanup', extraArgs);
 }
 
+// MCAA-241 — reading the local SQLite database needs Bun, so the import runs
+// through the installed plugin rather than in this Node process.
+export function runImportCommand(extraArgs: string[] = []): void {
+  spawnBunWorkerCommand('import', extraArgs);
+}
+
 export function runMcpCommand(): void {
   const mcpScript = packagePluginScriptPath('mcp-server.cjs');
   if (!existsSync(mcpScript)) {
