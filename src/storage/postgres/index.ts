@@ -3,6 +3,7 @@
 import type { PostgresQueryable } from './utils.js';
 import { PostgresAgentEventsRepository } from './agent-events.js';
 import { PostgresAuthRepository } from './auth.js';
+import { PostgresCorpusRepository } from './corpora.js';
 import {
   PostgresObservationGenerationJobEventsRepository,
   PostgresObservationGenerationJobRepository
@@ -17,6 +18,7 @@ import { PostgresRateLimitRepository } from './rate-limit.js';
 export * from './agent-events.js';
 export * from './auth.js';
 export * from './config.js';
+export * from './corpora.js';
 export * from './data-deletion.js';
 export * from './generation-jobs.js';
 export * from './observations.js';
@@ -41,6 +43,7 @@ export interface PostgresStorageRepositories {
   observationGenerationJobEvents: PostgresObservationGenerationJobEventsRepository;
   usage: PostgresUsageRepository;
   rateLimits: PostgresRateLimitRepository;
+  corpora: PostgresCorpusRepository;
 }
 
 export function createPostgresStorageRepositories(client: PostgresQueryable): PostgresStorageRepositories {
@@ -55,6 +58,7 @@ export function createPostgresStorageRepositories(client: PostgresQueryable): Po
     observationGenerationJobs: new PostgresObservationGenerationJobRepository(client),
     observationGenerationJobEvents: new PostgresObservationGenerationJobEventsRepository(client),
     usage: new PostgresUsageRepository(client),
-    rateLimits: new PostgresRateLimitRepository(client)
+    rateLimits: new PostgresRateLimitRepository(client),
+    corpora: new PostgresCorpusRepository(client)
   };
 }
