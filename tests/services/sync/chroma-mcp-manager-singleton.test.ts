@@ -787,6 +787,17 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
     expect(prewarmSpawnCalls.length).toBe(1);
   });
 
+  it('names the prewarm stderr tail in the error when uvx exits nonzero', async () => {
+    prewarmSpawnBehavior = 'failure';
+    prewarmStderr = 'error: failed to remove directory: os error 32';
+    const mgr = ChromaMcpManager.getInstance();
+
+    await expect(mgr.callTool('chroma_list_collections', { limit: 1 })).rejects.toThrow(
+      'chroma-mcp prewarm failed: chroma-mcp prewarm exited with code 1: error: failed to remove directory: os error 32'
+    );
+    expect(getDependencyStatus('uvx')?.message).toContain('os error 32');
+  });
+
   it('classifies a mid-handshake transport death as ChromaUnavailableError without error-tracking noise', async () => {
     const mgr = ChromaMcpManager.getInstance();
     // The MCP SDK throws a bare `Error: Not connected` when the subprocess dies
