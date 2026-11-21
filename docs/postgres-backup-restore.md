@@ -273,9 +273,12 @@ psql -h HOST -U postgres -d claude_mem_restore_check -c \
 #    rename it into place during a maintenance window) and redeploy.
 ```
 
-`pg_restore` must be at least the major version of the server that produced the
-dump. Running it from the same `postgres:16` image that took the dump avoids the
-mismatch entirely.
+Use `pg_dump` and `pg_restore` of the same major version as the server. An
+older `pg_dump` refuses to dump a newer server, and a newer one writes settings
+an older server rejects on restore (`pg_dump` 17+ emits `SET transaction_timeout`,
+which Postgres 16 does not know). Running both from the same `postgres:16` image
+as the server avoids the mismatch entirely. The drill below checks this before it
+starts.
 
 ## The restore drill
 

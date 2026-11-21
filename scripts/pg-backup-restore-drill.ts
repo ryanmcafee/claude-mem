@@ -47,6 +47,11 @@ async function main(): Promise<number> {
   }
 
   reportToolVersions();
+  const versionMismatch = await describeClientServerMismatch(dsn);
+  if (versionMismatch) {
+    console.error(versionMismatch);
+    return 1;
+  }
 
   const sourceDsn = withDatabase(dsn, SOURCE_DB);
   const restoredDsn = withDatabase(dsn, RESTORED_DB);
@@ -96,6 +101,29 @@ function reportToolVersions(): void {
   for (const tool of ['pg_dump', 'pg_restore']) {
     console.log(`${tool}: ${run(tool, ['--version']).trim()}`);
   }
+}
+
+async function describeClientServerMismatch(dsn: string): Promise<string | null> {
+  const serverVersionNum = await withAdminClient(dsn, async client => {
+    const result = await client.query<{ server_version_num: string }>('SHOW server_version_num');
+    return Number(result.rows[0]?.server_version_num ?? '0');
+  });
+  const serverMajor = Math.floor(serverVersionNum / 10000);
+  const mismatched = ['pg_dump', 'pg_restore']
+    .map(tool => ({ tool, major: clientMajorVersion(tool) }))
+    .filter(({ major }) => major !== serverMajor);
+  if (mismatched.length === 0) return null;
+  const found = mismatched.map(({ tool, major }) => `${tool} ${major}`).join(', ');
+  return `Client tools do not match the server's major version ${serverMajor} (found ${found}). `
+    + `A newer pg_dump writes settings an older server rejects on restore, and an older one refuses to dump. `
+    + `Install postgresql-client-${serverMajor} and put its bin directory `
+    + `(e.g. /usr/lib/postgresql/${serverMajor}/bin) first on PATH.`;
+}
+
+function clientMajorVersion(tool: string): number {
+  const match = /\(PostgreSQL\)\s+(\d+)/.exec(run(tool, ['--version']));
+  if (!match?.[1]) throw new Error(`Could not parse the major version from \`${tool} --version\`.`);
+  return Number(match[1]);
 }
 
 function run(command: string, args: string[]): string {
