@@ -116,8 +116,8 @@ async function describeClientServerMismatch(dsn: string): Promise<string | null>
   const found = mismatched.map(({ tool, major }) => `${tool} ${major}`).join(', ');
   return `Client tools do not match the server's major version ${serverMajor} (found ${found}). `
     + `A newer pg_dump writes settings an older server rejects on restore, and an older one refuses to dump. `
-    + `Install postgresql-client-${serverMajor} and put its bin directory `
-    + `(e.g. /usr/lib/postgresql/${serverMajor}/bin) first on PATH.`;
+    + `Put ${serverMajor}-series tools first on PATH: postgresql-client-${serverMajor} `
+    + `(e.g. /usr/lib/postgresql/${serverMajor}/bin), or wrappers that run them from the postgres:${serverMajor} image.`;
 }
 
 function clientMajorVersion(tool: string): number {

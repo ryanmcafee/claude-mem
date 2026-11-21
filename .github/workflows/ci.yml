@@ -295,16 +295,24 @@ jobs:
             exit 1
           fi
 
-      # Client tools must match the postgres:16 service major; the runner image ships a newer default.
-      - name: Ensure PostgreSQL 16 client tools
+      # Client tools must match the service major; the runner's apt archive has no postgresql-client-16.
+      - name: Use PostgreSQL 16 client tools from the service image
         run: |
           set -euo pipefail
-          if [ ! -x /usr/lib/postgresql/16/bin/pg_dump ]; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client-16
-          fi
-          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
-          /usr/lib/postgresql/16/bin/pg_dump --version
+          docker pull --quiet postgres:16
+          shim_dir="$RUNNER_TEMP/pg16-bin"
+          mkdir -p "$shim_dir"
+          for tool in pg_dump pg_restore; do
+            cat > "$shim_dir/$tool" <<EOF
+          #!/usr/bin/env bash
+          tmp="\${TMPDIR:-/tmp}"
+          exec docker run --rm --network host --user "\$(id -u):\$(id -g)" -v "\$tmp:\$tmp" postgres:16 $tool "\$@"
+          EOF
+            chmod +x "$shim_dir/$tool"
+          done
+          echo "$shim_dir" >> "$GITHUB_PATH"
+          "$shim_dir/pg_dump" --version
+          "$shim_dir/pg_restore" --version
 
       - name: Backup and restore drill (pg_dump -> pg_restore -> verify)
         run: bun scripts/pg-backup-restore-drill.ts
