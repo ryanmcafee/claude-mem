@@ -69,8 +69,10 @@ import {
 
 const TOOL_NAMES = CORPUS_MCP_TOOLS.map((t) => t.name);
 
-function tool(name: CorpusToolName) {
-  const found = CORPUS_MCP_TOOLS.find((t) => t.name === name);
+type CorpusTool<N extends CorpusToolName> = Extract<(typeof CORPUS_MCP_TOOLS)[number], { name: N }>;
+
+function tool<N extends CorpusToolName>(name: N): CorpusTool<N> {
+  const found = CORPUS_MCP_TOOLS.find((t): t is CorpusTool<N> => t.name === name);
   if (!found) throw new Error(`tool ${name} missing from CORPUS_MCP_TOOLS`);
   return found;
 }
@@ -120,8 +122,9 @@ describe('corpus contract v1 -- MCP tool surface is frozen', () => {
       expect(declared).toContain(name);
     }
     // And every locally declared corpus tool must exist remotely.
+    const remoteNames: readonly string[] = TOOL_NAMES;
     for (const name of declared) {
-      expect(TOOL_NAMES).toContain(name);
+      expect(remoteNames).toContain(name);
     }
   });
 
@@ -888,7 +891,7 @@ describe('corpus contract v1 -- the refusal is in the contract', () => {
 // to be visible there or an agent only learns it from a failed call.
 describe('corpus contract v1 -- build_corpus states the refusal in its tool schema', () => {
   it.each(CORPUS_OWNER_ONLY_FILTER_FIELDS)('documents %s as unavailable with scope "shared"', (field) => {
-    const property = tool('build_corpus').inputSchema.properties[field] as { description: string };
+    const property = tool('build_corpus').inputSchema.properties[field];
     expect(property.description).toContain('scope "shared"');
   });
 });
