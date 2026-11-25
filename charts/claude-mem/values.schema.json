@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "const": "api-key", "description": "local-dev and disabled are refused." },
+        "apiKeys": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "existingSecret": { "type": "string" } }
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "mode": { "enum": ["uri", "credentials"] },
+        "uriKey": { "type": "string", "minLength": 1 },
+        "hostKey": { "type": "string", "minLength": 1 },
+        "portKey": { "type": "string", "minLength": 1 },
+        "dbnameKey": { "type": "string", "minLength": 1 },
+        "usernameKey": { "type": "string", "minLength": 1 },
+        "passwordKey": { "type": "string", "minLength": 1 },
+        "sslMode": { "enum": ["", "disable", "require"] },
+        "poolMax": { "type": ["string", "integer"] }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string", "pattern": "^(rediss?://.*)?$" },
+        "existingSecret": { "type": "string" },
+        "urlKey": { "type": "string", "minLength": 1 },
+        "queuePrefix": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" }
+      }
+    },
+    "valkey": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "provider": { "enum": ["claude-code", "anthropic", "openai"] },
+        "model": { "type": "string" },
+        "maxOutputTokens": { "type": ["string", "integer"] },
+        "claudeCodeOAuthToken": { "$ref": "#/definitions/secretToggle" },
+        "anthropicApiKey": { "$ref": "#/definitions/secretToggle" },
+        "openaiApiKey": { "$ref": "#/definitions/secretToggle" },
+        "openaiBaseUrl": { "type": "string", "pattern": "^(https?://.*)?$" }
+      }
+    },
+    "extraEnv": { "$ref": "#/definitions/envList" },
+    "server": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "extraEnv": { "$ref": "#/definitions/envList" }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 0 },
+        "extraEnv": { "$ref": "#/definitions/envList" },
+        "keda": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "address": { "type": "string" },
+            "listLength": { "type": ["string", "integer"] }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowedNamespaceLabels": { "type": "object" },
+        "allowedPodLabels": { "type": "object" },
+        "extraFrom": { "type": "array" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "clusterIssuer": { "type": "string" },
+        "hosts": { "type": "array" },
+        "tls": { "type": "array" }
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "parentRefs": { "type": "array" },
+        "hostnames": { "type": "array" }
+      }
+    }
+  },
+  "definitions": {
+    "secretToggle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "key"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "envList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

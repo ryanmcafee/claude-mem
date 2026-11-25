@@ -1,0 +1,10 @@
+chart-dirs:
+  - charts
+charts:
+  - charts/claude-mem
+target-branch: main
+validate-maintainers: false
+check-version-increment: true
+namespace: claude-mem-ci
+release-label: app.kubernetes.io/instance
+helm-extra-args: --timeout 10m

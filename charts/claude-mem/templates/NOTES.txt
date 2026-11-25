@@ -1,0 +1,19 @@
+claude-mem {{ .Chart.AppVersion }} is installed as {{ include "claude-mem.fullname" . }}.
+
+In-cluster URL: http://{{ include "claude-mem.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+Every request needs `Authorization: Bearer <api key>`.
+{{- if not .Values.auth.apiKeys.existingSecret }}
+
+No auth.apiKeys.existingSecret is set, so no key was imported. Create one:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "claude-mem.fullname" . }}-server -- \
+    bun /opt/claude-mem/scripts/server-service.cjs server api-key create --scope memories:read,memories:write
+{{- end }}
+{{- if .Values.valkey.enabled }}
+
+WARNING: valkey.enabled=true runs a single unpersisted Valkey. Queued jobs are lost on restart. Dev only.
+{{- end }}
+{{- if eq .Values.generation.provider "claude-code" }}
+
+Generation provider is claude-code (subscription). The server-beta worker does not consume
+CLAUDE_CODE_OAUTH_TOKEN yet, so it starts with generation disabled; see the chart README.
+{{- end }}

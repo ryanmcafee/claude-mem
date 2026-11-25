@@ -1,0 +1,100 @@
+name: Helm chart
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chart-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: v3.19.0
+  CNPG_MANIFEST: https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.2.yaml
+  CNPG_MANIFEST_SHA256: ea4cc355b394e10661d30c6b409cefb19029dd973bccb76b1ed8c789985bc68c
+  NAMESPACE: claude-mem-ci
+  IMAGE_REPOSITORY: claude-mem
+  IMAGE_TAG: ci
+
+jobs:
+  render:
+    name: lint and rendered-manifest gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
+      - name: ct lint
+        run: ct lint --config charts/claude-mem/ci/ct.yaml
+      - name: Rendered-manifest gates
+        run: bun test charts/claude-mem/tests
+
+  kind:
+    name: ct install on Kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
+      # The image copies plugin/, which is only regenerated at release; build it from this commit's source.
+      - name: Build plugin bundle from source
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Build image
+        run: docker build -f docker/claude-mem/Dockerfile -t "$IMAGE_REPOSITORY:$IMAGE_TAG" .
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: claude-mem
+      - name: Load image into Kind
+        run: kind load docker-image "$IMAGE_REPOSITORY:$IMAGE_TAG" --name claude-mem
+      - name: Install CloudNativePG operator
+        run: |
+          curl -fsSL "$CNPG_MANIFEST" -o cnpg.yaml
+          echo "$CNPG_MANIFEST_SHA256  cnpg.yaml" | sha256sum -c -
+          kubectl apply --server-side -f cnpg.yaml
+          kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=5m
+      - name: Create external dependencies
+        run: |
+          kubectl create namespace "$NAMESPACE"
+          kubectl -n "$NAMESPACE" apply -f charts/claude-mem/ci/fixtures/dependencies.yaml
+          kubectl -n "$NAMESPACE" create secret generic agent-keys --from-literal=ci="cmem_$(openssl rand -hex 24)"
+          kubectl -n "$NAMESPACE" create secret generic ci-redis --from-literal=url=redis://valkey:6379
+          kubectl -n "$NAMESPACE" create secret generic ci-generation --from-literal=CLAUDE_CODE_OAUTH_TOKEN=ci-placeholder-not-a-token
+          kubectl -n "$NAMESPACE" rollout status deploy/valkey --timeout=5m
+          kubectl -n "$NAMESPACE" wait cluster/pg --for=condition=Ready --timeout=10m
+      - name: ct install
+        run: >-
+          ct install --config charts/claude-mem/ci/ct.yaml
+          --helm-extra-set-args "--set=image.repository=$IMAGE_REPOSITORY --set=image.tag=$IMAGE_TAG --set=image.pullPolicy=Never"
+      - name: Install, upgrade and verify migrations and credentials
+        run: bash charts/claude-mem/ci/acceptance.sh
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n "$NAMESPACE" get all,jobs,secrets,networkpolicies,pdb -o wide || true
+          kubectl -n "$NAMESPACE" describe pods || true
+          for pod in $(kubectl -n "$NAMESPACE" get pods -o name); do
+            echo "=== $pod"; kubectl -n "$NAMESPACE" logs "$pod" --all-containers --tail=200 || true
+          done

@@ -1,0 +1,68 @@
+{{- if .Values.worker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-worker
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "claude-mem.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if .Values.worker.keda.enabled }}
+{{- $k := .Values.worker.keda }}
+{{- $address := $k.address | default (printf "%s:6379" (include "claude-mem.valkeyFullname" .)) }}
+{{- if $k.passwordSecret.name }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-worker
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: {{ $k.passwordSecret.name }}
+      key: {{ $k.passwordSecret.key }}
+{{- end }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-worker
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: {{ include "claude-mem.fullname" . }}-worker
+  minReplicaCount: {{ $k.minReplicaCount }}
+  maxReplicaCount: {{ $k.maxReplicaCount }}
+  pollingInterval: {{ $k.pollingInterval }}
+  cooldownPeriod: {{ $k.cooldownPeriod }}
+  triggers:
+    {{- range $queue := list "server_beta_generate_event" "server_beta_generate_summary" }}
+    - type: redis
+      metadata:
+        address: {{ $address | quote }}
+        listName: {{ printf "%s:%s:wait" $.Values.redis.queuePrefix $queue | quote }}
+        listLength: {{ $k.listLength | quote }}
+      {{- if $k.passwordSecret.name }}
+      authenticationRef:
+        name: {{ include "claude-mem.fullname" $ }}-worker
+      {{- end }}
+    {{- end }}
+{{- end }}

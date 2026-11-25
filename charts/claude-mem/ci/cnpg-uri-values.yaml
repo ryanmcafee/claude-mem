@@ -1,0 +1,18 @@
+database:
+  existingSecret: pg-app
+  mode: uri
+  sslMode: disable
+redis:
+  existingSecret: ci-redis
+auth:
+  apiKeys:
+    existingSecret: agent-keys
+generation:
+  existingSecret: ci-generation
+tests:
+  apiKeyName: ci
+server:
+  replicaCount: 2
+networkPolicy:
+  allowedNamespaceLabels:
+    kubernetes.io/metadata.name: claude-mem-ci
