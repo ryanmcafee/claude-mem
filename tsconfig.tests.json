@@ -16,6 +16,7 @@
   "include": [
     "tests/**/*.ts",
     "tests/**/*.tsx",
+    "charts/**/tests/**/*.ts",
     "src/**/*.d.ts"
   ],
   "exclude": [
