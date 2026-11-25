@@ -3,8 +3,11 @@
 // Asserts on `helm template` output, never on the README. Requires helm on PATH
 // (or HELM_BIN); the chart workflow installs a pinned version.
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { join } from 'path';
+
+// A cold first `helm template` on a CI runner took 1.5-5s, so bun's 5s default flaked.
+setDefaultTimeout(30_000);
 
 const chartDir = join(import.meta.dir, '..');
 const helmBin = process.env.HELM_BIN ?? 'helm';
@@ -24,7 +27,7 @@ interface Manifest {
 function helm(args: string[]): { ok: boolean; stdout: string; stderr: string } {
   const result = Bun.spawnSync([helmBin, ...args], { cwd: chartDir });
   if (result.exitCode === null) {
-    throw new Error(`could not run ${helmBin}; install helm or set HELM_BIN`);
+    throw new Error(`${helmBin} ${args[0]} was killed by ${result.signalCode ?? 'an unknown signal'} before exiting`);
   }
   return { ok: result.exitCode === 0, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
