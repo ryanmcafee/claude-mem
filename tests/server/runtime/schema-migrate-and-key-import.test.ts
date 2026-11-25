@@ -18,6 +18,7 @@ import {
   importServerApiKey,
   normalizeImportedApiKey,
 } from '../../../src/server/runtime/api-key-import.js';
+import { listServerApiKeys } from '../../../src/server/runtime/api-key-list.js';
 import { logger } from '../../../src/utils/logger.js';
 import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
@@ -171,5 +172,40 @@ describe('server migrate and api-key import against Postgres', () => {
     expect(rerun.status).toBe('revoked');
     const stored = await pool.query<{ revoked_at: Date | null }>('SELECT revoked_at FROM api_keys WHERE id = $1', [first.id]);
     expect(stored.rows[0].revoked_at).not.toBeNull();
+  });
+
+  it('lists active and revoked keys by id without selecting secret material', async () => {
+    const pool = newPool();
+    await bootstrapServerPostgresSchema(pool);
+    const kept = await importServerApiKey(pool, { name: 'agent-c', rawKey: 'cmem_' + 'c3'.repeat(24) });
+    const revoked = await importServerApiKey(pool, { name: 'agent-d', rawKey: 'cmem_' + 'd4'.repeat(24) });
+    await pool.query('UPDATE api_keys SET revoked_at = now() WHERE id = $1', [revoked.id]);
+
+    const all = await listServerApiKeys(pool, {});
+    const active = await listServerApiKeys(pool, { active: true });
+
+    expect(all.keys.map(key => [key.id, key.status]).sort()).toEqual(
+      [[kept.id, 'active'], [revoked.id, 'revoked']].sort(),
+    );
+    expect(active.keys.map(key => key.id)).toEqual([kept.id]);
+    expect(Object.keys(active.keys[0]).sort()).toEqual(
+      ['createdAt', 'expiresAt', 'id', 'projectId', 'scopes', 'status', 'teamId'],
+    );
+  });
+
+  it('filters by team and pages with limit and offset', async () => {
+    const pool = newPool();
+    await bootstrapServerPostgresSchema(pool);
+    const first = await importServerApiKey(pool, { name: 'agent-e', rawKey: 'cmem_' + 'e5'.repeat(24) });
+    const second = await importServerApiKey(pool, { name: 'agent-f', rawKey: 'cmem_' + 'f6'.repeat(24) });
+    const teamId = (await listServerApiKeys(pool, {})).keys[0].teamId ?? undefined;
+
+    const pageOne = await listServerApiKeys(pool, { team: teamId, limit: '1' });
+    const pageTwo = await listServerApiKeys(pool, { team: teamId, limit: '1', offset: '1' });
+    const otherTeam = await listServerApiKeys(pool, { team: 'team-that-does-not-exist' });
+
+    expect(pageTwo).toMatchObject({ teamId, limit: 1, offset: 1, count: 1 });
+    expect([pageOne.keys[0].id, pageTwo.keys[0].id].sort()).toEqual([first.id, second.id].sort());
+    expect(otherTeam.count).toBe(0);
   });
 });
