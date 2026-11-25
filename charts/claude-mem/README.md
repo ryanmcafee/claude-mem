@@ -10,31 +10,75 @@ Postgres and Redis/Valkey are external. A dev-only Valkey can be bundled.
 
 ## Quick start
 
-Prerequisites: a Postgres database (a CloudNativePG `Cluster` works unmodified) and a Redis or Valkey
-endpoint with `maxmemory-policy noeviction`.
+Prerequisites: `kubectl`, `helm` 3, `openssl`, and the
+[CloudNativePG operator](https://cloudnative-pg.io/documentation/current/installation_upgrade/)
+installed in the cluster, and a default StorageClass for the Postgres volume. Run the commands from
+the repository root.
+
+1. Create the namespace and the dependencies. The release reads the Postgres Secret from its own
+   namespace, so the CloudNativePG `Cluster` must live in `$NS` and be Ready before install.
+   `ci/fixtures/dependencies.yaml` is a trial setup: a one-instance `Cluster` named `pg` and an
+   unauthenticated Valkey with `maxmemory-policy noeviction`, the same fixture CI installs against.
+
+   ```sh
+   NS=claude-mem
+   kubectl create namespace "$NS"
+   kubectl -n "$NS" apply -f charts/claude-mem/ci/fixtures/dependencies.yaml
+   kubectl -n "$NS" wait cluster/pg --for=condition=Ready --timeout=10m
+   kubectl -n "$NS" rollout status deploy/valkey --timeout=5m
+   ```
+
+   CloudNativePG then creates the `pg-app` Secret (`<cluster>-app` for a `Cluster` named `pg`).
+   To use your own Valkey or Redis instead, see [Redis / Valkey](#redis--valkey); it must run with
+   `maxmemory-policy noeviction` (`--maxmemory-policy noeviction` or `CONFIG SET maxmemory-policy noeviction`).
+
+2. Create the bootstrap API keys. One raw key per entry; each entry name becomes the key name.
+
+   ```sh
+   kubectl -n "$NS" create secret generic claude-mem-api-keys \
+     --from-literal=agent-a="cmem_$(openssl rand -hex 24)"
+   ```
+
+3. Install and wait for the pods to be Ready, then run the chart test.
+
+   ```sh
+   helm install claude-mem ./charts/claude-mem -n "$NS" --wait --timeout 10m \
+     --set database.existingSecret=pg-app \
+     --set redis.url=redis://valkey:6379 \
+     --set auth.apiKeys.existingSecret=claude-mem-api-keys \
+     --set tests.apiKeyName=agent-a
+
+   helm test claude-mem -n "$NS" --logs
+   ```
+
+   The test prints `healthz=200 anonymous=401 authorized=200`. Without `--wait`, the test can run
+   before the server is up and fail to connect.
+
+4. Check it yourself. Read the bootstrapped key back out of the Secret; this is the value to give
+   the agent. Every request except `/healthz` needs `Authorization: Bearer <key>`.
+
+   ```sh
+   KEY=$(kubectl -n "$NS" get secret claude-mem-api-keys -o jsonpath='{.data.agent-a}' | base64 -d)
+   kubectl -n "$NS" port-forward svc/claude-mem 37877:37877 &
+   until curl -s -o /dev/null http://127.0.0.1:37877/healthz; do sleep 1; done
+   code() { curl -s -o /dev/null -w '%{http_code}\n' "$@"; }
+   code http://127.0.0.1:37877/healthz                                        # 200
+   code http://127.0.0.1:37877/v1/usage                                       # 401
+   code -H "Authorization: Bearer $KEY" http://127.0.0.1:37877/v1/usage       # 200
+   ```
+
+Agents running in another namespace cannot reach the server until that namespace is allowed by the
+NetworkPolicy (see [Exposure](#exposure)). For example, for agents in namespace `agents`:
 
 ```sh
-NS=claude-mem
-kubectl create namespace "$NS"
-
-# One raw key per entry. Each entry name becomes the key name, e.g. one per agent.
-kubectl -n "$NS" create secret generic claude-mem-api-keys \
-  --from-literal=agent-a="cmem_$(openssl rand -hex 24)"
-
-# Redis URL with credentials stays in a Secret.
-kubectl -n "$NS" create secret generic claude-mem-redis \
-  --from-literal=url='redis://:PASSWORD@valkey.valkey.svc:6379'
-
-helm install claude-mem ./charts/claude-mem -n "$NS" \
-  --set database.existingSecret=pg-app \
-  --set redis.existingSecret=claude-mem-redis \
-  --set auth.apiKeys.existingSecret=claude-mem-api-keys \
-  --set tests.apiKeyName=agent-a
-
-helm test claude-mem -n "$NS" --logs
+helm upgrade claude-mem ./charts/claude-mem -n "$NS" --reuse-values --wait \
+  --set-string 'networkPolicy.allowedNamespaceLabels.kubernetes\.io/metadata\.name=agents'
 ```
 
-`pg-app` is the `<cluster>-app` Secret CloudNativePG creates for a `Cluster` named `pg`.
+Agents then use `http://claude-mem.<namespace>.svc:37877`.
+
+Resource names in this README assume the release is named `claude-mem`. For any other release name
+the Service is `<release>-claude-mem` and the server Deployment is `<release>-claude-mem-server`.
 
 ## Database
 
@@ -94,11 +138,19 @@ $SERVER server api-key create --name agent-b --scope memories:read,memories:writ
 $SERVER server api-key create --name tenant-x --team <team-id> --project <project-id> \
   --scope memories:read,memories:write
 
-$SERVER server api-key list --active
 $SERVER server api-key revoke <key-id>
 ```
 
-The raw key is printed once. Store it in your secret manager, not in git.
+`create` prints JSON with `id`, `key`, `teamId` and `projectId`. The raw `key` is printed once:
+store it in your secret manager, not in git. Record the `id` too; it is what `revoke` takes.
+
+Without `--team`/`--project`, the key binds to the default team and project (named
+`local-hook-team` / `local-hook-project`), and the output shows their ids. No CLI lists teams or
+projects yet; read them from the `teams` and `projects` tables in Postgres.
+
+`server api-key list --active` (and its alias `server keys`) currently fails against Postgres with
+`column "last_used_at" does not exist`. Until that is fixed, the `create` output is the only place
+to find a key id.
 
 Do not create keys with `memories:write:shared` or `*`. A wildcard key can publish to shared scope,
 and shared scope stays off until cross-tenant read redaction ships. The chart never mints either

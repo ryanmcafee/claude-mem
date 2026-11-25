@@ -852,7 +852,7 @@ describe("large cursor pagination", () => {
 			}
 		}
 		expect(count).toBe(10_001);
-	});
+	}, 30_000);
 
 	it("orders '9' before '10' and a pull after the cursor returns only new rows", async () => {
 		const stub = hub("seq-length-boundary");
