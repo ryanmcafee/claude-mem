@@ -2,8 +2,8 @@ apiVersion: v2
 name: claude-mem
 description: Centralized claude-mem memory server, generation worker and schema migration for Kubernetes.
 type: application
-version: 0.1.0
-appVersion: "sha-65d3973"
+version: 0.1.1
+appVersion: "sha-59b3125"
 home: https://github.com/ryanmcafee/claude-mem
 sources:
   - https://github.com/ryanmcafee/claude-mem
