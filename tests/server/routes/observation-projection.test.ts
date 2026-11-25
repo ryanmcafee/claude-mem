@@ -5,8 +5,8 @@
 // tests/server/runtime/tenant-isolation-routes.test.ts proves the projection is
 // actually wired into every read surface against a real Postgres. This file
 // pins the projection's own rules, which are cheap to assert exhaustively:
-// which fields survive, that nested publisher JSON is dropped wholesale, and
-// that the origin token is stable without being reversible.
+// the exact set of fields that survive, that nested publisher JSON is dropped
+// wholesale, and that a shared row carries no publisher provenance.
 
 import { describe, expect, it } from 'bun:test';
 import {

@@ -353,8 +353,8 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
     });
     expect(defaultScope.json.observations.map(o => o.teamId)).toEqual([teamBId]);
 
-    // Opt in: tenant B now also sees tenant A's published row — as content plus
-    // an opaque origin token, while its own row keeps full fidelity.
+    // Opt in: tenant B now also sees tenant A's published row — as content only,
+    // while its own row keeps full fidelity.
     const sharedScope = await post<SearchResponse>('/v1/search', keyB, {
       projectId: projectBId,
       query: 'shared knowledge',
@@ -467,8 +467,8 @@ describe('MCAA-237 — multi-tenant isolation on the remote API', () => {
   });
 
   // MCAA-281 — the projection. Publishing content is not publishing provenance,
-  // so every shared read surface reduces a foreign row to content + an opaque
-  // origin token. Each of these fails against the pre-MCAA-281 serializer.
+  // so every shared read surface reduces a foreign row to content and timestamps.
+  // Each of these fails against the pre-MCAA-281 serializer.
   describe('MCAA-281 — shared reads carry no publisher provenance', () => {
     // The scenario from the review: a curator publishes a runbook from a project
     // whose id is a repository name, with the write path's injected agentId and
