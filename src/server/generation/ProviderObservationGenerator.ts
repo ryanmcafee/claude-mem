@@ -24,6 +24,7 @@ import {
   type ProcessGeneratedResponseOutcome,
 } from './processGeneratedResponse.js';
 import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
+import { recordProviderTokens } from '../observability/server-metrics.js';
 
 // Phase 11 — sentinel exception class so the worker can distinguish
 // scope-violation/revoked-key failures from generic processor errors and
@@ -302,6 +303,7 @@ export class ProviderObservationGenerator {
         projectName: project?.name ?? null,
       },
     });
+    recordProviderTokens(result);
 
     const persistInput = {
       pool: this.options.pool,

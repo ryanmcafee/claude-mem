@@ -23,6 +23,8 @@ import { SessionsObservationsAdapter } from '../compat/SessionsObservationsAdapt
 import { SessionsSummarizeAdapter } from '../compat/SessionsSummarizeAdapter.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
+import { startObservability, type StopObservability } from '../observability/runtime.js';
+import { httpMetricsRoutes } from '../observability/server-metrics.js';
 import type { ServerServiceGraph, ServerQueueLaneMetric } from './types.js';
 
 // Phase 1d retains the persisted runtime literal `'server-beta'`. Renaming the
@@ -112,6 +114,7 @@ export class ServerService {
   private boundPort: number | null = null;
   private readonly persistRuntimeState: boolean;
   private server: Server | null = null;
+  private stopObservability: StopObservability | null = null;
   private stopping = false;
 
   constructor(options: ServerServiceOptions) {
@@ -126,7 +129,14 @@ export class ServerService {
       return;
     }
 
+    const queueManager = this.graph.queueManager;
+    this.stopObservability = await startObservability({
+      component: 'server',
+      ...(queueManager instanceof ActiveServerQueueManager ? { readQueueLanes: () => queueManager.getLaneMetrics() } : {}),
+    });
+
     const server = new Server({
+      preBodyParserRoutes: [httpMetricsRoutes],
       // #2572 — server runtime is reachable over the network in Docker, so it
       // emits hardening headers (the worker, loopback-only, does not).
       securityHeaders: true,
@@ -216,7 +226,13 @@ export class ServerService {
 
     server.finalizeRoutes();
 
-    await server.listen(this.requestedPort, this.host);
+    try {
+      await server.listen(this.requestedPort, this.host);
+    } catch (error) {
+      await this.stopObservability();
+      this.stopObservability = null;
+      throw error;
+    }
     this.server = server;
     this.boundPort = resolveBoundPort(server) ?? this.requestedPort;
     if (this.persistRuntimeState) {
@@ -243,6 +259,8 @@ export class ServerService {
         }
         this.server = null;
       }
+      await this.stopObservability?.();
+      this.stopObservability = null;
       await Promise.all([
         this.graph.queueManager.close(),
         this.graph.generationWorkerManager.close(),
@@ -877,6 +895,7 @@ export async function runServerGenerationWorker(): Promise<void> {
   // CLAUDE_MEM_GENERATION_DISABLED, because this IS the generation worker.
   delete process.env.CLAUDE_MEM_GENERATION_DISABLED;
   const service = await createServerService();
+  const stopObservability = await startObservability({ component: 'worker' });
   const state = service.getRuntimeState();
   logger.info('SYSTEM', 'Server generation worker started (no HTTP)', {
     pid: process.pid,
@@ -890,6 +909,7 @@ export async function runServerGenerationWorker(): Promise<void> {
     if (stopping) return;
     stopping = true;
     try {
+      await stopObservability();
       await service.stop();
     } finally {
       process.exit(0);

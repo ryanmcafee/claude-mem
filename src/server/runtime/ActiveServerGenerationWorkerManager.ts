@@ -5,6 +5,8 @@ import { logger } from '../../utils/logger.js';
 import { PostgresAuthRepository } from '../../storage/postgres/auth.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { ProviderObservationGenerator } from '../generation/ProviderObservationGenerator.js';
+import { recordGenerationAttempt } from '../observability/generation-metrics.js';
+import { nowUnixNano } from '../observability/otlp-tracer.js';
 import type { ServerGenerationProvider } from '../generation/providers/shared/types.js';
 import type { ServerGenerationJobPayload } from '../jobs/types.js';
 import type { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
@@ -62,10 +64,15 @@ export class ActiveServerGenerationWorkerManager implements ServerGenerationWork
    */
   start(): void {
     if (this.started) return;
-    const dispatcher = async (job: Job<ServerGenerationJobPayload>) => {
+    const dispatcherFor = (lane: 'event' | 'summary') => async (job: Job<ServerGenerationJobPayload>) => {
+      const startedAt = process.hrtime.bigint();
+      const startUnixNano = nowUnixNano();
       try {
-        return await this.generator.process(job);
+        const result = await this.generator.process(job);
+        recordGenerationAttempt({ lane, startedAt, startUnixNano, bullmqJobId: job.id });
+        return result;
       } catch (error) {
+        recordGenerationAttempt({ lane, startedAt, startUnixNano, bullmqJobId: job.id, error });
         logger.warn('SYSTEM', 'observation generator failed', {
           jobId: job.id,
           kind: job.data.kind,
@@ -74,12 +81,12 @@ export class ActiveServerGenerationWorkerManager implements ServerGenerationWork
         throw error;
       }
     };
-    this.options.queueManager.start('event', dispatcher);
+    this.options.queueManager.start('event', dispatcherFor('event'));
     // Phase 6: wire the summary lane alongside the event lane. Concurrency
     // defaults to 1 per ServerJobQueue config (per the plan), and the same
     // ProviderObservationGenerator dispatches on job.data.source_type via the
     // outbox row reload inside lockOutbox+process.
-    this.options.queueManager.start('summary', dispatcher);
+    this.options.queueManager.start('summary', dispatcherFor('summary'));
 
     // Phase 12 — audit stalled events directly. Phase 11's audit chain now
     // covers the operator and provider lifecycle; stalled jobs come from
