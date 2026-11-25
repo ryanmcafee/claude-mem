@@ -317,6 +317,11 @@ export async function runServerServiceCli(argv: string[] = process.argv.slice(2)
     return;
   }
 
+  if (command === 'server' && argv[1]?.toLowerCase() === 'migrate') {
+    await runServerMigrateCli();
+    return;
+  }
+
   // #2572 — `server keys` lists ACTIVE keys (never printing secrets) and
   // `server jobs` lists/inspects queued generation jobs. Both read the
   // Postgres backend the server runtime uses. `keys` is an alias for
@@ -445,6 +450,8 @@ export async function runServerServiceCli(argv: string[] = process.argv.slice(2)
       console.error('  restart          stop then start (daemon)');
       console.error('  status           print runtime status');
       console.error('  server api-key create|list|revoke|migrate-scopes   manage Postgres API keys');
+      console.error('  server api-key import --key-dir DIR                hash and register one key per file in DIR');
+      console.error('  server migrate                                     apply the Postgres schema once, then exit');
       console.error('  server keys                                        alias for api-key list --active (no secrets)');
       console.error('  server jobs [list|inspect <id>]                    list/inspect generation jobs');
       process.exit(1);
@@ -522,6 +529,11 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
   // reads from.
   if (sub === 'migrate-scopes') {
     await migrateServerPostgresApiKeyScopes(argv.slice(1));
+    return;
+  }
+
+  if (sub === 'import') {
+    await importServerApiKeysFromDirectory(options.keyDir);
     return;
   }
 
@@ -652,7 +664,7 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
     }
 
     console.error(`Unknown server api-key subcommand: ${sub ?? '(none)'}`);
-    console.error('Usage: server-service server api-key create|list|revoke|migrate-scopes');
+    console.error('Usage: server-service server api-key create|list|revoke|migrate-scopes|import');
     process.exit(1);
   } finally {
     // Pool is shared; do not close here. The process will exit and the
@@ -773,7 +785,50 @@ export async function runServerJobsCli(argv: string[]): Promise<void> {
   }, null, 2));
 }
 
+export async function runServerMigrateCli(): Promise<void> {
+  assertServerRuntimeForCli('migrate');
+  const { getSharedPostgresPool, closePostgresPool, bootstrapServerPostgresSchema } = await import('../../storage/postgres/index.js');
+  const { readPostgresSchemaStatus } = await import('./create-server-service.js');
+  const pool = getSharedPostgresPool({ requireDatabaseUrl: true });
+  try {
+    await bootstrapServerPostgresSchema(pool);
+    const status = await readPostgresSchemaStatus(pool);
+    if (!status.initialized) {
+      throw new Error('server migrate finished but the schema version row is missing; check the database role can write server_beta_schema_migrations.');
+    }
+    console.log(JSON.stringify({ status: 'migrated', ...status }, null, 2));
+  } finally {
+    await closePostgresPool(pool);
+  }
+}
+
+async function importServerApiKeysFromDirectory(keyDir: string | undefined): Promise<void> {
+  if (!keyDir) {
+    throw new Error('Usage: server-service server api-key import --key-dir DIR (one raw key per file; the file name is the key name)');
+  }
+  const { readdirSync, statSync } = await import('fs');
+  const { join } = await import('path');
+  const { getSharedPostgresPool, closePostgresPool } = await import('../../storage/postgres/index.js');
+  const { importServerApiKey } = await import('./api-key-import.js');
+  const names = readdirSync(keyDir)
+    .filter(name => !name.startsWith('.') && statSync(join(keyDir, name)).isFile())
+    .sort();
+  if (names.length === 0) {
+    throw new Error(`No API key files found in ${keyDir}; mount a Secret with at least one key.`);
+  }
+  const pool = getSharedPostgresPool({ requireDatabaseUrl: true });
+  try {
+    for (const name of names) {
+      const result = await importServerApiKey(pool, { name, rawKey: readFileSync(join(keyDir, name), 'utf8') });
+      console.log(JSON.stringify(result));
+    }
+  } finally {
+    await closePostgresPool(pool);
+  }
+}
+
 interface CliFlagValues {
+  keyDir?: string;
   scope?: string;
   scopes?: string;
   team?: string;
@@ -786,9 +841,10 @@ interface CliFlagValues {
 }
 
 function parseFlagArgs(argv: string[]): CliFlagValues {
-  return parseArgs({
+  const { values } = parseArgs({
     args: argv,
     options: {
+      'key-dir': { type: 'string' },
       scope: { type: 'string' },
       scopes: { type: 'string' },
       team: { type: 'string' },
@@ -801,7 +857,9 @@ function parseFlagArgs(argv: string[]): CliFlagValues {
     },
     strict: false,
     allowPositionals: true,
-  }).values as CliFlagValues;
+  });
+  const keyDir = values['key-dir'];
+  return { ...values, keyDir: typeof keyDir === 'string' ? keyDir : undefined } as CliFlagValues;
 }
 
 // Phase 10 — generation-worker-only entrypoint. Starts BullMQ workers against

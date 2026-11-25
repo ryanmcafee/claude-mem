@@ -5,6 +5,8 @@ import type { PostgresQueryable } from './utils.js';
 
 export const SERVER_POSTGRES_SCHEMA_VERSION = 1;
 
+export const SERVER_SCHEMA_BOOTSTRAP_LOCK_KEY = '7319454081930551';
+
 // Phase 1b (cmem-sdk rename): the TS constant is renamed but the table-name
 // strings remain on `server_beta_*` since they are persisted DDL identifiers.
 // Plan §1d will migrate the table names in a coordinated DDL change.
@@ -49,6 +51,8 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
 
   await client.query('BEGIN');
   try {
+    // Concurrent CREATE ... IF NOT EXISTS races on the catalog; serialize every bootstrapping process.
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [SERVER_SCHEMA_BOOTSTRAP_LOCK_KEY]);
     await applyPhase1Migration(client);
     await client.query('COMMIT');
   } catch (error) {

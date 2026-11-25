@@ -6,6 +6,7 @@ import { ModeManager } from '../../services/domain/ModeManager.js';
 import { getSharedPostgresPool, SERVER_POSTGRES_SCHEMA_VERSION } from '../../storage/postgres/index.js';
 import { bootstrapServerPostgresSchema } from '../../storage/postgres/schema.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
+import type { PostgresQueryable } from '../../storage/postgres/utils.js';
 import { getRedisQueueConfig } from '../queue/redis-config.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ActiveServerGenerationWorkerManager } from './ActiveServerGenerationWorkerManager.js';
@@ -184,7 +185,7 @@ export async function createServerService(
   // the service starts accepting jobs.
   loadServerMode();
   const pool = options.pool ?? getSharedPostgresPool({ requireDatabaseUrl: true });
-  const bootstrap = await initializePostgres(pool, options.bootstrapSchema ?? true);
+  const bootstrap = await initializePostgres(pool, options.bootstrapSchema ?? schemaBootstrapEnabled());
   const queueManager = options.queueManager ?? buildQueueManager();
   const generationDisabled = options.generationDisabled
     ?? (process.env.CLAUDE_MEM_GENERATION_DISABLED === '1'
@@ -322,12 +323,37 @@ function buildQueueManager(): ServerQueueManager {
   return new ActiveServerQueueManager(config);
 }
 
+export function schemaBootstrapEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = (env.CLAUDE_MEM_SERVER_SCHEMA_BOOTSTRAP ?? '').trim().toLowerCase();
+  return raw !== 'false' && raw !== '0';
+}
+
 async function initializePostgres(pool: PostgresPool, bootstrapSchema: boolean): Promise<ServerBootstrapStatus> {
   if (!bootstrapSchema) {
-    return { initialized: false, schemaVersion: null, appliedAt: null };
+    return requireMigratedPostgresSchema(pool);
   }
 
   await bootstrapServerPostgresSchema(pool);
+  return readPostgresSchemaStatus(pool);
+}
+
+export async function requireMigratedPostgresSchema(pool: PostgresQueryable): Promise<ServerBootstrapStatus> {
+  const status = await readPostgresSchemaStatus(pool).catch((error: unknown) => {
+    const err = error instanceof Error ? error : new Error(String(error));
+    throw new Error(
+      `CLAUDE_MEM_SERVER_SCHEMA_BOOTSTRAP=false but the Postgres schema could not be read (${err.message}). Run \`server migrate\` against this database first.`,
+      { cause: err },
+    );
+  });
+  if (!status.initialized) {
+    throw new Error(
+      `CLAUDE_MEM_SERVER_SCHEMA_BOOTSTRAP=false but Postgres schema version ${SERVER_POSTGRES_SCHEMA_VERSION} is not applied. Run \`server migrate\` against this database first.`,
+    );
+  }
+  return status;
+}
+
+export async function readPostgresSchemaStatus(pool: PostgresQueryable): Promise<ServerBootstrapStatus> {
   const result = await pool.query(
     `
       SELECT version, applied_at

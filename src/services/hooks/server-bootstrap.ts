@@ -189,7 +189,7 @@ export function hashApiKey(rawKey: string): string {
   return createHash('sha256').update(rawKey).digest('hex');
 }
 
-async function findOrCreateTeam(pool: PostgresPool): Promise<string> {
+export async function findOrCreateTeam(pool: PostgresPool): Promise<string> {
   const existing = await pool.query<{ id: string }>(
     `SELECT id FROM teams WHERE name = $1 LIMIT 1`,
     [LOCAL_HOOK_TEAM_NAME],
@@ -202,7 +202,7 @@ async function findOrCreateTeam(pool: PostgresPool): Promise<string> {
   return team.id;
 }
 
-async function findOrCreateProject(pool: PostgresPool, teamId: string): Promise<string> {
+export async function findOrCreateProject(pool: PostgresPool, teamId: string): Promise<string> {
   const existing = await pool.query<{ id: string }>(
     `SELECT id FROM projects WHERE team_id = $1 AND name = $2 LIMIT 1`,
     [teamId, LOCAL_HOOK_PROJECT_NAME],
