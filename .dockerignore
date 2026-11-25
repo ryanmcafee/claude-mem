@@ -4,3 +4,8 @@ logs/
 .docker-claude-mem-data/
 .venv
 .venv-*
+**/.env
+**/.env.*
+**/.npmrc
+**/*.pem
+**/id_rsa

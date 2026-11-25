@@ -17,6 +17,17 @@ part of this test; generation against a real provider needs separate QA.
 `.github/workflows/container-publish.yml` builds natively on amd64 and arm64 on
 GitHub-hosted runners. Every PR builds, scans and tests both architectures. Main
 pushes publish `ghcr.io/<owner>/<repo>:sha-<first-seven-commit-characters>`.
+The Docker builder installs root dependencies with `npm ci --legacy-peer-deps
+--ignore-scripts`, then compiles from the checked-out source without running
+the lockfile generator. It compares the generated plugin manifest with the
+committed copy and installs runtime dependencies with Bun's frozen lockfile.
+When a dependency changes, run `npm run build` locally and commit both
+`plugin/package.json` and `plugin/bun.lock`. Native runtime dependencies are
+built in the separate dependency stage.
+The smoke test checks a source-only marker in the resulting server bundle, so a
+stale committed `plugin/scripts` snapshot fails before publication. CI also
+proves an inconsistent plugin manifest fails the image build, and seeds
+disposable `.env` and `.npmrc` files to check that they never reach runtime.
 `vX.Y.Z` tag pushes (the same source as `npm-publish.yml`) and published releases
 publish `X.Y.Z`, `X.Y`, and `X`; prereleases publish only their complete version.
 The release tag must match `package.json`. No `latest` tag is created.
@@ -34,8 +45,9 @@ verification precedes promotion to consumer tags. `build-<run>-<attempt>*` tags
 are staging artifacts, not consumer tags. Failed publication can leave these
 unsigned staging tags behind; do not deploy them.
 
-**Reproducibility:** base images and actions are pinned by digest/commit; plugin
-runtime dependencies use the committed Bun lockfile; Claude CLI, Bun, Trivy and
+**Reproducibility:** base images and actions are pinned by digest/commit; the
+source builder uses the committed npm lockfile, and plugin runtime dependencies
+use the reviewed, committed Bun lockfile; Claude CLI, Bun, Trivy and
 Cosign versions are explicit. Alpine runtime packages are security-updated at
 build time, so rebuilds can differ. Artifact handoff avoids rebuilding between
 scan and release. Update base digests and tool versions in a reviewed PR, with
@@ -94,6 +106,10 @@ Full successful build/scan/smoke timings are still pending; timeouts are bounds,
 not measurements. There is no shared
 build cache: per-job BuildKit cache only accelerates the smoke image export,
 preventing cross-branch cache poisoning and stale dependency validation.
+The source-builder stage adds one locked npm install and bundle build per
+architecture. In the local verification, the locked npm install took 9 seconds;
+the source build finished within 5 seconds. CI wall-clock change remains to be
+measured on the first PR run.
 
 Implementation references: [BuildKit attestations](https://docs.docker.com/build/ci/github-actions/attestations/), [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/), and [Trivy image scanning](https://trivy.dev/docs/dev/references/configuration/cli/trivy_image/).
 
@@ -133,3 +149,9 @@ startup within a 90-second deadline (each request capped at two seconds), but fa
 immediately on a nonconforming HTTP response; redirects are not followed.
 Run `python3 scripts/container/test-health.py` for offline positive/negative
 contract fixtures. This uses no credentials and works in forks.
+# Runtime plugin files
+
+The image copies only paths in `scripts/container/runtime-plugin-files.txt` from
+the source-built plugin. Add an intentional runtime file to that list when the
+plugin gains one. The build fails if a listed file is missing, and the image
+smoke test seeds an extra credential-named file to verify it stays out.
