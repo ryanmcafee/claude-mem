@@ -30,7 +30,7 @@ assert_one_migration_run() {
 helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" "${VALUES[@]}" "${IMAGE_ARGS[@]}" --wait --timeout 10m
 assert_one_migration_run 1
 
-helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" "${VALUES[@]}" "${IMAGE_ARGS[@]}" --set podAnnotations.rollout=2 --wait --timeout 10m
+helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" "${VALUES[@]}" "${IMAGE_ARGS[@]}" --set-string podAnnotations.rollout=2 --wait --timeout 10m
 assert_one_migration_run 2
 
 rows=$(migration_rows)

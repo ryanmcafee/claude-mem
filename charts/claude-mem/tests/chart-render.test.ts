@@ -18,7 +18,7 @@ interface PodSpec { containers: Container[]; initContainers?: Container[]; secur
 interface Manifest {
   kind: string;
   metadata: { name: string; annotations?: Record<string, string> };
-  spec?: { template?: { spec: PodSpec } } & Partial<PodSpec>;
+  spec?: { template?: { metadata?: { annotations?: Record<string, unknown> }; spec: PodSpec } } & Partial<PodSpec>;
 }
 
 function helm(args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -193,5 +193,13 @@ describe('hardening', () => {
         });
       }
     }
+  });
+});
+
+describe('pod annotations', () => {
+  it('renders numeric --set values as strings', () => {
+    const { manifests } = render(['podAnnotations.rollout=2']);
+    const server = manifests.find(m => m.kind === 'Deployment' && m.metadata.name === 'mem-claude-mem-server');
+    expect(server?.spec?.template?.metadata?.annotations?.rollout).toBe('2');
   });
 });

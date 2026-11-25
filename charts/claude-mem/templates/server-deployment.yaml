@@ -21,7 +21,7 @@ spec:
         {{- end }}
       {{- with .Values.podAnnotations }}
       annotations:
-        {{- toYaml . | nindent 8 }}
+        {{- include "claude-mem.stringMap" . | nindent 8 }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "claude-mem.serviceAccountName" . }}

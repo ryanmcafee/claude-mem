@@ -96,6 +96,13 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{/* Annotation values must be strings; quote numbers and booleans passed via --set. */}}
+{{- define "claude-mem.stringMap" -}}
+{{- range $key, $value := . }}
+{{ $key }}: {{ $value | toString | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "claude-mem.secretEnv" -}}
 - name: {{ .name }}
   valueFrom:
