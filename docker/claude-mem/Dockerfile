@@ -17,8 +17,12 @@ COPY package.json package-lock.json ./
 # The lockfile uses the repository's legacy peer resolution for tree-sitter
 # grammars; make it explicit so a clean builder matches contributor installs.
 RUN npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+COPY plugin/package.json plugin/bun.lock /reviewed-plugin/
 COPY . .
-RUN npm run build \
+RUN node scripts/sync-plugin-manifests.js \
+ && node scripts/build-hooks.js \
+ && (cmp -s /reviewed-plugin/package.json plugin/package.json || { echo 'Generated plugin manifest differs from committed plugin/package.json; regenerate and commit it' >&2; exit 1; }) \
+ && (cmp -s /reviewed-plugin/bun.lock plugin/bun.lock || { echo 'Committed plugin/bun.lock changed during image build' >&2; exit 1; }) \
  && rm -rf plugin/node_modules
 
 FROM base AS dependencies
@@ -51,7 +55,15 @@ RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
 FROM base AS runtime
 COPY --from=dependencies /opt/claude-cli /opt/claude-cli
 RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
-COPY --from=bundle /build/plugin/ /opt/claude-mem/
+COPY --from=bundle /build/plugin/package.json /build/plugin/bun.lock /build/plugin/.mcp.json /opt/claude-mem/
+COPY --from=bundle /build/plugin/.claude-plugin /opt/claude-mem/.claude-plugin
+COPY --from=bundle /build/plugin/.codex-plugin /opt/claude-mem/.codex-plugin
+COPY --from=bundle /build/plugin/hooks /opt/claude-mem/hooks
+COPY --from=bundle /build/plugin/modes /opt/claude-mem/modes
+COPY --from=bundle /build/plugin/scripts/*.js /build/plugin/scripts/*.cjs /build/plugin/scripts/*.map /opt/claude-mem/scripts/
+COPY --from=bundle /build/plugin/skills /opt/claude-mem/skills
+COPY --from=bundle /build/plugin/sqlite /opt/claude-mem/sqlite
+COPY --from=bundle /build/plugin/ui /opt/claude-mem/ui
 COPY --from=dependencies /opt/claude-mem/node_modules /opt/claude-mem/node_modules
 COPY --chmod=755 docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
 # Home is intentionally immutable; only these subdirectories need volumes.

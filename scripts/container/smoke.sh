@@ -27,6 +27,11 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     rg --version
     apk info -v
     cd /opt/claude-mem
+    for secret in .env .npmrc; do
+      if find . -name "$secret" -print -quit | grep -q .; then
+        echo "Unexpected $secret in runtime plugin" >&2; exit 1
+      fi
+    done
     if ! grep -Fq "claude-mem:shared-origin:v1" scripts/server-service.cjs; then
       echo "Server bundle is stale: missing source-only shared-origin marker; rebuild from src/" >&2
       exit 1
