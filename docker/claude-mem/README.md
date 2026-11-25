@@ -149,3 +149,9 @@ startup within a 90-second deadline (each request capped at two seconds), but fa
 immediately on a nonconforming HTTP response; redirects are not followed.
 Run `python3 scripts/container/test-health.py` for offline positive/negative
 contract fixtures. This uses no credentials and works in forks.
+# Runtime plugin files
+
+The image copies only paths in `scripts/container/runtime-plugin-files.txt` from
+the source-built plugin. Add an intentional runtime file to that list when the
+plugin gains one. The build fails if a listed file is missing, and the image
+smoke test seeds an extra credential-named file to verify it stays out.

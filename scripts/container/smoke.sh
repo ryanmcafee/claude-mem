@@ -32,6 +32,9 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
         echo "Unexpected $secret in runtime plugin" >&2; exit 1
       fi
     done
+    if test -e hooks/credentials.json; then
+      echo "Unexpected credential sentinel in runtime plugin hooks" >&2; exit 1
+    fi
     if ! grep -Fq "claude-mem:shared-origin:v1" scripts/server-service.cjs; then
       echo "Server bundle is stale: missing source-only shared-origin marker; rebuild from src/" >&2
       exit 1
