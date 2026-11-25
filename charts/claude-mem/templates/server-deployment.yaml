@@ -1,0 +1,85 @@
+{{- include "claude-mem.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-server
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "claude-mem.selectorLabels" (dict "root" . "component" "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "claude-mem.labels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- include "claude-mem.stringMap" . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "claude-mem.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "claude-mem.topologySpread" (dict "root" . "component" "server" "spec" .Values.server) | nindent 8 }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "claude-mem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: CLAUDE_MEM_CONTAINER_MODE
+              value: server
+            - name: CLAUDE_MEM_HOST
+              value: 0.0.0.0
+            - name: CLAUDE_MEM_SERVER_HOST
+              value: 0.0.0.0
+            - name: CLAUDE_MEM_SERVER_PORT
+              value: {{ .Values.server.port | quote }}
+            - name: CLAUDE_MEM_GENERATION_DISABLED
+              value: "true"
+            {{- include "claude-mem.coreEnv" . | nindent 12 }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          startupProbe:
+            {{- toYaml .Values.server.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.server.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.server.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "claude-mem.writableVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "claude-mem.writableVolumes" . | nindent 8 }}

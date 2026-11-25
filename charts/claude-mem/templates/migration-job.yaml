@@ -1,0 +1,79 @@
+{{- $keysSecret := .Values.auth.apiKeys.existingSecret }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-migrate
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migration.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "claude-mem.selectorLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      # Hooks run before the chart's ServiceAccount exists on first install.
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if $keysSecret }}
+      initContainers:
+      {{- else }}
+      containers:
+      {{- end }}
+        - name: migrate
+          image: {{ include "claude-mem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["bun", "/opt/claude-mem/scripts/server-service.cjs", "server", "migrate"]
+          env:
+            - name: CLAUDE_MEM_CONTAINER_MODE
+              value: shell
+            {{- include "claude-mem.coreEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "claude-mem.writableVolumeMounts" . | nindent 12 }}
+      {{- if $keysSecret }}
+      containers:
+        - name: import-api-keys
+          image: {{ include "claude-mem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["bun", "/opt/claude-mem/scripts/server-service.cjs", "server", "api-key", "import", "--key-dir", "/run/secrets/claude-mem-api-keys"]
+          env:
+            - name: CLAUDE_MEM_CONTAINER_MODE
+              value: shell
+            {{- include "claude-mem.coreEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "claude-mem.writableVolumeMounts" . | nindent 12 }}
+            - name: api-keys
+              mountPath: /run/secrets/claude-mem-api-keys
+              readOnly: true
+      {{- end }}
+      volumes:
+        {{- include "claude-mem.writableVolumes" . | nindent 8 }}
+        {{- if $keysSecret }}
+        - name: api-keys
+          secret:
+            secretName: {{ $keysSecret }}
+            defaultMode: 0440
+        {{- end }}

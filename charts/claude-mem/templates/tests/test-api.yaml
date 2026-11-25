@@ -1,0 +1,49 @@
+{{- if .Values.tests.apiKeyName }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-test-api
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: api
+      image: {{ include "claude-mem.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      env:
+        - name: CLAUDE_MEM_CONTAINER_MODE
+          value: shell
+        - name: BASE_URL
+          value: http://{{ include "claude-mem.fullname" . }}:{{ .Values.service.port }}
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.apiKeys.existingSecret }}
+              key: {{ .Values.tests.apiKeyName }}
+      args:
+        - bash
+        - -ec
+        - |
+          code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
+          health=$(code "$BASE_URL/healthz")
+          anonymous=$(code "$BASE_URL/v1/usage")
+          authorized=$(code -H "Authorization: Bearer $API_KEY" "$BASE_URL/v1/usage")
+          echo "healthz=$health anonymous=$anonymous authorized=$authorized"
+          [ "$health" = 200 ] && [ "$anonymous" = 401 ] && [ "$authorized" = 200 ]
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: {}
+{{- end }}

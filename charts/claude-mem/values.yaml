@@ -1,0 +1,241 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/ryanmcafee/claude-mem
+  # Defaults to the chart appVersion.
+  tag: ""
+  # Takes precedence over tag when set, e.g. sha256:...
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+commonLabels: {}
+podAnnotations: {}
+podLabels: {}
+
+# Only api-key is accepted; the chart refuses to render anything else.
+auth:
+  mode: api-key
+  apiKeys:
+    # Secret holding one raw key per entry; the entry name becomes the key name.
+    # Each key gets memories:read and memories:write only.
+    existingSecret: ""
+
+database:
+  # Secret holding the Postgres connection. Works unmodified with a CloudNativePG
+  # `<cluster>-app` Secret in either mode below.
+  existingSecret: ""
+  # uri: read the full connection URL from uriKey.
+  # credentials: build the URL from host/port/dbname keys and pass the user and
+  # password as PGUSER/PGPASSWORD, so passwords never need URL-encoding.
+  mode: uri
+  uriKey: uri
+  hostKey: host
+  portKey: port
+  dbnameKey: dbname
+  usernameKey: username
+  passwordKey: password
+  # disable, require, or "" to follow the URL's sslmode.
+  sslMode: ""
+  poolMax: ""
+
+redis:
+  # Plain URL without credentials, e.g. redis://valkey:6379.
+  url: ""
+  # Or a Secret entry holding the full redis:// or rediss:// URL.
+  existingSecret: ""
+  urlKey: url
+  # BullMQ key prefix; KEDA list names derive from it.
+  queuePrefix: claude_mem
+
+# Dev-only single-replica Valkey with no persistence. Never enable in production.
+valkey:
+  enabled: false
+  image:
+    repository: docker.io/valkey/valkey
+    tag: 8.1.4-alpine
+    digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+generation:
+  # One Secret, same shape as Paperclip: CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY.
+  existingSecret: ""
+  # claude-code (subscription OAuth token), anthropic (metered API key) or openai
+  # (metered key against an OpenAI-compatible endpoint such as LiteLLM).
+  provider: claude-code
+  model: ""
+  maxOutputTokens: ""
+  claudeCodeOAuthToken:
+    enabled: true
+    key: CLAUDE_CODE_OAUTH_TOKEN
+  anthropicApiKey:
+    # Metered billing. Off unless explicitly enabled.
+    enabled: false
+    key: ANTHROPIC_API_KEY
+  openaiApiKey:
+    # Metered billing. Off unless explicitly enabled.
+    enabled: false
+    key: OPENAI_API_KEY
+  # OpenAI-compatible base URL, e.g. http://litellm.litellm.svc:4000/v1.
+  openaiBaseUrl: ""
+
+# Extra env applied to server, worker and migration pods.
+extraEnv: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+server:
+  replicaCount: 2
+  port: 37877
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+  pdb:
+    enabled: true
+    minAvailable: 1
+  topologySpreadConstraints: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  # Mutually exclusive with keda.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 80
+  # Scales on BullMQ waiting-list length. Requires KEDA CRDs in the cluster.
+  keda:
+    enabled: false
+    minReplicaCount: 1
+    maxReplicaCount: 8
+    pollingInterval: 15
+    cooldownPeriod: 300
+    listLength: "20"
+    # Redis address (host:port) KEDA dials; required when enabled.
+    address: ""
+    # Optional Secret entry with the Redis password for KEDA.
+    passwordSecret:
+      name: ""
+      key: password
+  topologySpreadConstraints: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+migration:
+  # Seconds before Kubernetes stops a hung migration.
+  activeDeadlineSeconds: 600
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 37877
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  # Namespaces (by label) allowed to reach the server.
+  allowedNamespaceLabels: {}
+  # Pods (by label) allowed to reach the server, in any allowed namespace or this one.
+  allowedPodLabels: {}
+  # Extra raw ingress `from` peers, e.g. the ingress controller namespace.
+  extraFrom: []
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # cert-manager.io/cluster-issuer value; adds the annotation when set.
+  clusterIssuer: ""
+  hosts: []
+  #  - host: memory.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: claude-mem-tls
+  #    hosts: [memory.example.com]
+
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  #  - name: shared-gateway
+  #    namespace: gateway-system
+  #    sectionName: https
+  hostnames: []
+  path: /
+
+tests:
+  # Key name in auth.apiKeys.existingSecret that `helm test` authenticates with.
+  apiKeyName: ""
