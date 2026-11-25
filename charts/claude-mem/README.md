@@ -12,7 +12,8 @@ Postgres and Redis/Valkey are external. A dev-only Valkey can be bundled.
 
 Prerequisites: `kubectl`, `helm` 3, `openssl`, and the
 [CloudNativePG operator](https://cloudnative-pg.io/documentation/current/installation_upgrade/)
-installed in the cluster. Run the commands from the repository root.
+installed in the cluster, and a default StorageClass for the Postgres volume. Run the commands from
+the repository root.
 
 1. Create the namespace and the dependencies. The release reads the Postgres Secret from its own
    namespace, so the CloudNativePG `Cluster` must live in `$NS` and be Ready before install.
@@ -59,9 +60,11 @@ installed in the cluster. Run the commands from the repository root.
    ```sh
    KEY=$(kubectl -n "$NS" get secret claude-mem-api-keys -o jsonpath='{.data.agent-a}' | base64 -d)
    kubectl -n "$NS" port-forward svc/claude-mem 37877:37877 &
-   curl -s http://127.0.0.1:37877/healthz
-   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:37877/v1/usage                       # 401
-   curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:37877/v1/usage
+   until curl -s -o /dev/null http://127.0.0.1:37877/healthz; do sleep 1; done
+   code() { curl -s -o /dev/null -w '%{http_code}\n' "$@"; }
+   code http://127.0.0.1:37877/healthz                                        # 200
+   code http://127.0.0.1:37877/v1/usage                                       # 401
+   code -H "Authorization: Bearer $KEY" http://127.0.0.1:37877/v1/usage       # 200
    ```
 
 Agents running in another namespace cannot reach the server until that namespace is allowed by the
