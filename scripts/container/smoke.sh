@@ -27,6 +27,10 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     rg --version
     apk info -v
     cd /opt/claude-mem
+    if ! grep -Fq "claude-mem:shared-origin:v1" scripts/server-service.cjs; then
+      echo "Server bundle is stale: missing source-only shared-origin marker; rebuild from src/" >&2
+      exit 1
+    fi
     ./node_modules/.bin/tree-sitter --version
     node -e "const Parser = require(\"tree-sitter\"); const p = new Parser(); p.setLanguage(require(\"tree-sitter-javascript\")); const t = p.parse(\"const answer = 42;\"); if (t.rootNode.hasError) throw Error(t.rootNode.toString()); console.log(t.rootNode.toString());"
     cd /home/node

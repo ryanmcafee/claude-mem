@@ -8,6 +8,17 @@ RUN printf '%s\n' https://dl-cdn.alpinelinux.org/alpine/v3.24/main https://dl-cd
  && addgroup -g 1000 node && adduser -D -u 1000 -G node node
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV USE_BUILTIN_RIPGREP=0
+FROM base AS bundle
+# Rebuild the shipped plugin from this checkout, not the release snapshot in
+# plugin/scripts. npm ci is locked by the repository package-lock.json.
+RUN apk add --no-cache npm
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY . .
+RUN npm run build \
+ && rm -rf plugin/node_modules
+
 FROM base AS dependencies
 # Build the exact npm CLI versions against musl; upstream Linux downloads use
 # glibc and require symbols (including __res_init) that gcompat cannot provide.
@@ -20,7 +31,7 @@ RUN for version in 0.23.2 0.24.7 0.26.9; do \
       && "/opt/tree-sitter/$version/bin/tree-sitter" --version || exit 1; \
     done
 WORKDIR /opt/claude-mem
-COPY plugin/package.json plugin/bun.lock ./
+COPY --from=bundle /build/plugin/package.json /build/plugin/bun.lock ./
 # Configure native CLI installers before any dependency lifecycle can download
 # or execute a glibc binary. npm rebuild below runs the dependency lifecycles.
 RUN bun install --frozen-lockfile --production --ignore-scripts
@@ -38,7 +49,7 @@ RUN npm install --prefix /opt/claude-cli --omit=dev --no-audit --no-fund \
 FROM base AS runtime
 COPY --from=dependencies /opt/claude-cli /opt/claude-cli
 RUN ln -s /opt/claude-cli/node_modules/.bin/claude /usr/local/bin/claude
-COPY plugin/ /opt/claude-mem/
+COPY --from=bundle /build/plugin/ /opt/claude-mem/
 COPY --from=dependencies /opt/claude-mem/node_modules /opt/claude-mem/node_modules
 COPY --chmod=755 docker/claude-mem/entrypoint.sh /usr/local/bin/claude-mem-entrypoint
 # Home is intentionally immutable; only these subdirectories need volumes.
