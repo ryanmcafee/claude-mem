@@ -8,6 +8,18 @@ Runs claude-mem as a centralized memory server for agents:
 
 Postgres and Redis/Valkey are external. A dev-only Valkey can be bundled.
 
+## Published releases
+
+Versioned image releases publish the chart to
+`oci://ghcr.io/ryanmcafee/charts/claude-mem` with the same version as the image tag.
+The packaged chart's `appVersion` selects that image tag by default. Inspect a release
+from a clean machine with `helm show chart oci://ghcr.io/ryanmcafee/charts/claude-mem
+--version <version>`. Install it with `helm install claude-mem
+oci://ghcr.io/ryanmcafee/charts/claude-mem --version <version>` plus the dependency
+and credential values below. The image and chart are published in one workflow run;
+if that run fails, check both registry artifacts before retrying because the registry
+does not offer an atomic two-artifact publish.
+
 ## Quick start
 
 Prerequisites: `kubectl`, `helm` 3, `openssl`, and the
