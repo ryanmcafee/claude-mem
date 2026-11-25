@@ -120,7 +120,7 @@ enabled key, or the render fails.
 
 | `generation.provider` | Worker behavior |
 |---|---|
-| `claude-code` (default) | Receives `CLAUDE_CODE_OAUTH_TOKEN`. The server-beta worker has no subscription provider yet, so generation stays disabled and the worker logs why. |
+| `claude-code` (default) | Receives `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_MEM_SERVER_PROVIDER=claude-code`, so it generates on the subscription. `ANTHROPIC_API_KEY` is stripped from that path. Without `generation.existingSecret`, generation stays disabled and the worker logs why. |
 | `anthropic` | Generates with `ANTHROPIC_API_KEY`. |
 | `openai` | Generates against `generation.openaiBaseUrl` (any OpenAI-compatible `/chat/completions` endpoint, e.g. LiteLLM at `http://litellm.litellm.svc:4000/v1`) using `OPENAI_API_KEY`. |
 

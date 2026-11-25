@@ -12,8 +12,8 @@ No auth.apiKeys.existingSecret is set, so no key was imported. Create one:
 
 WARNING: valkey.enabled=true runs a single unpersisted Valkey. Queued jobs are lost on restart. Dev only.
 {{- end }}
-{{- if eq .Values.generation.provider "claude-code" }}
+{{- if and (eq .Values.generation.provider "claude-code") (not .Values.generation.existingSecret) }}
 
-Generation provider is claude-code (subscription). The server-beta worker does not consume
-CLAUDE_CODE_OAUTH_TOKEN yet, so it starts with generation disabled; see the chart README.
+No generation.existingSecret is set, so the worker has no CLAUDE_CODE_OAUTH_TOKEN and generation
+is disabled; see the chart README.
 {{- end }}

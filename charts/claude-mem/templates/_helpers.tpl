@@ -181,7 +181,10 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLAUDE_MEM_OPENROUTER_BASE_URL
   value: {{ . | quote }}
 {{- end }}
-{{- if eq $g.provider "anthropic" }}
+{{- if and (eq $g.provider "claude-code") $g.claudeCodeOAuthToken.enabled $g.existingSecret }}
+- name: CLAUDE_MEM_SERVER_PROVIDER
+  value: claude-code
+{{- else if eq $g.provider "anthropic" }}
 - name: CLAUDE_MEM_SERVER_PROVIDER
   value: claude
 {{- else if eq $g.provider "openai" }}

@@ -101,7 +101,12 @@ describe('generation credentials', () => {
     const worker = podSpec(manifests, 'Deployment', 'mem-claude-mem-worker');
     for (const name of METERED_ENV) expect(envNames(worker)).not.toContain(name);
     expect(envNames(worker)).toContain('CLAUDE_CODE_OAUTH_TOKEN');
-    expect(envNames(worker)).not.toContain('CLAUDE_MEM_SERVER_PROVIDER');
+    expect(allContainers(worker).flatMap(c => c.env ?? []).find(e => e.name === 'CLAUDE_MEM_SERVER_PROVIDER')?.value).toBe('claude-code');
+  });
+
+  it('leaves the claude-code provider unselected without an OAuth token Secret', () => {
+    const { manifests } = render([]);
+    expect(envNames(podSpec(manifests, 'Deployment', 'mem-claude-mem-worker'))).not.toContain('CLAUDE_MEM_SERVER_PROVIDER');
   });
 
   it('keeps every provider credential off the server and migration pods', () => {
