@@ -125,9 +125,94 @@
         "parentRefs": { "type": "array" },
         "hostnames": { "type": "array" }
       }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "allowedNamespaceLabels": { "type": "object" },
+        "allowedPodLabels": { "type": "object" },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "$ref": "#/definitions/duration" },
+            "scrapeTimeout": { "$ref": "#/definitions/duration" },
+            "labels": { "type": "object" }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "labels": { "type": "object" },
+            "runbookUrl": { "type": "string", "minLength": 1 },
+            "serverDown": {
+              "type": "object",
+              "properties": { "for": { "$ref": "#/definitions/duration" } }
+            },
+            "queueBacklog": {
+              "type": "object",
+              "properties": {
+                "threshold": { "type": "number", "minimum": 0 },
+                "for": { "$ref": "#/definitions/duration" }
+              }
+            },
+            "generationFailures": {
+              "type": "object",
+              "properties": {
+                "threshold": { "$ref": "#/definitions/ratio" },
+                "minAttempts": { "type": "number", "minimum": 0 },
+                "window": { "$ref": "#/definitions/duration" },
+                "for": { "$ref": "#/definitions/duration" }
+              }
+            },
+            "httpErrors": {
+              "type": "object",
+              "properties": {
+                "threshold": { "$ref": "#/definitions/ratio" },
+                "minRequests": { "type": "number", "minimum": 0 },
+                "window": { "$ref": "#/definitions/duration" },
+                "for": { "$ref": "#/definitions/duration" }
+              }
+            }
+          }
+        },
+        "dashboard": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": "string" },
+            "labels": { "type": "object" },
+            "annotations": { "type": "object" }
+          }
+        }
+      }
+    },
+    "tracing": {
+      "type": "object",
+      "properties": {
+        "otlp": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "endpoint": { "type": "string" },
+            "headersSecret": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {
+    "duration": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h|d|w|y)$" },
+    "ratio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
     "secretToggle": {
       "type": "object",
       "additionalProperties": false,

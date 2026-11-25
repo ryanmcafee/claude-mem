@@ -236,6 +236,63 @@ httpRoute:
   hostnames: []
   path: /
 
+metrics:
+  # Serve /metrics from the server and worker on a port separate from the API, never exposed by ingress.
+  enabled: true
+  port: 9464
+  # Who may scrape the metrics port when networkPolicy.enabled. Both empty allows any namespace.
+  allowedNamespaceLabels: {}
+  allowedPodLabels: {}
+  # Requires the Prometheus Operator CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  # Requires the Prometheus Operator CRDs; the queries rely on its namespace and job target labels.
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # Each alert links here plus its anchor; point it at your own copy of RUNBOOK.md if you fork the docs.
+    runbookUrl: https://github.com/ryanmcafee/claude-mem/blob/main/charts/claude-mem/RUNBOOK.md
+    serverDown:
+      for: 5m
+    queueBacklog:
+      # Waiting jobs in one lane that are not draining.
+      threshold: 100
+      for: 15m
+    generationFailures:
+      # Ratio of failed generation attempts over the window, once at least minAttempts ran in it.
+      threshold: 0.25
+      minAttempts: 5
+      window: 15m
+      for: 15m
+    httpErrors:
+      # Ratio of 5xx API responses (probes excluded) over the window, once at least minRequests arrived in it.
+      threshold: 0.05
+      minRequests: 20
+      window: 10m
+      for: 10m
+  # ConfigMap picked up by the Grafana dashboard sidecar.
+  dashboard:
+    enabled: false
+    # Defaults to the release namespace; set it to the namespace your sidecar watches.
+    namespace: ""
+    labels:
+      grafana_dashboard: "1"
+    annotations: {}
+
+tracing:
+  otlp:
+    # Exports HTTP and generation spans as OTLP/HTTP JSON.
+    enabled: false
+    # Collector base URL, e.g. http://otel-collector.observability:4318; /v1/traces is appended.
+    endpoint: ""
+    # Optional Secret entry holding OTEL_EXPORTER_OTLP_HEADERS, e.g. authorization=Bearer%20<token>.
+    headersSecret:
+      name: ""
+      key: headers
+
 tests:
   # Key name in auth.apiKeys.existingSecret that `helm test` authenticates with.
   apiKeyName: ""

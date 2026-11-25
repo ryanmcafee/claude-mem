@@ -36,6 +36,7 @@ spec:
         {{- with $np.extraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+    {{- include "claude-mem.metricsIngressRule" . | nindent 4 }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -49,7 +50,12 @@ spec:
     matchLabels:
       {{- include "claude-mem.selectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
   policyTypes: [Ingress]
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    {{- include "claude-mem.metricsIngressRule" . | nindent 4 }}
+  {{- else }}
   ingress: []
+  {{- end }}
 {{- if .Values.valkey.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

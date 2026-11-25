@@ -58,9 +58,14 @@ spec:
               value: worker
             {{- include "claude-mem.coreEnv" . | nindent 12 }}
             {{- include "claude-mem.generationEnv" . | nindent 12 }}
+            {{- include "claude-mem.observabilityEnv" . | nindent 12 }}
             {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            {{- include "claude-mem.metricsPort" . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:
