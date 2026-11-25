@@ -17,9 +17,9 @@ part of this test; generation against a real provider needs separate QA.
 `.github/workflows/container-publish.yml` builds natively on amd64 and arm64 on
 GitHub-hosted runners. Every PR builds, scans and tests both architectures. Main
 pushes publish `ghcr.io/<owner>/<repo>:sha-<first-seven-commit-characters>`.
-The Docker builder runs `npm ci --ignore-scripts && npm run build` from the
-checked-out source. Native runtime dependencies are built in the separate
-dependency stage.
+The Docker builder installs root dependencies with `npm ci --legacy-peer-deps
+--ignore-scripts`, then runs `npm run build` from the checked-out source. Native
+runtime dependencies are built in the separate dependency stage.
 The smoke test checks a source-only marker in the resulting server bundle, so a
 stale committed `plugin/scripts` snapshot fails before publication.
 `vX.Y.Z` tag pushes (the same source as `npm-publish.yml`) and published releases
@@ -101,7 +101,7 @@ not measurements. There is no shared
 build cache: per-job BuildKit cache only accelerates the smoke image export,
 preventing cross-branch cache poisoning and stale dependency validation.
 The source-builder stage adds one locked npm install and bundle build per
-architecture. In the local verification, `npm ci --ignore-scripts` took 9 seconds;
+architecture. In the local verification, the locked npm install took 9 seconds;
 the source build finished within 5 seconds. CI wall-clock change remains to be
 measured on the first PR run.
 

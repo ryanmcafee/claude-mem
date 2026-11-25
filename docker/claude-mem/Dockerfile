@@ -14,7 +14,9 @@ FROM base AS bundle
 RUN apk add --no-cache npm
 WORKDIR /build
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+# The lockfile uses the repository's legacy peer resolution for tree-sitter
+# grammars; make it explicit so a clean builder matches contributor installs.
+RUN npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build \
  && rm -rf plugin/node_modules
