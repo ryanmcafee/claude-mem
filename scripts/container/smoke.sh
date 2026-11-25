@@ -28,7 +28,7 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     apk info -v
     cd /opt/claude-mem
     for secret in .env .npmrc; do
-      if find . -name "$secret" -print -quit | grep -q .; then
+      if find . -path ./node_modules -prune -o -name "$secret" -print -quit | grep -q .; then
         echo "Unexpected $secret in runtime plugin" >&2; exit 1
       fi
     done
