@@ -31,21 +31,21 @@ import { execFileSync } from 'child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'fs';
 import { isSameProcess } from '../src/shared/process-identity.js';
 
-interface ProcessRow {
+export interface ProcessRow {
   pid: number;
   ppid: number;
   image: string;
   commandLine: string;
 }
 
-interface LedgerEntry {
+export interface LedgerEntry {
   test: string;
   role: 'root' | 'descendant';
   pid: number;
   startToken: string | null;
 }
 
-interface Survivor {
+export interface Survivor {
   pid: number;
   ppid: number;
   image: string;
@@ -210,6 +210,43 @@ function attribute(
   return null;
 }
 
+/** This census and its children, e.g. the CIM read's powershell.exe, which may hold a reissued ledger PID. */
+export function ownSubtree(table: ProcessRow[], selfPid: number): Set<number> {
+  const own = new Set<number>([selfPid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const row of table) {
+      if (!own.has(row.pid) && own.has(row.ppid)) {
+        own.add(row.pid);
+        grew = true;
+      }
+    }
+  }
+  return own;
+}
+
+export function findSurvivors(
+  table: ProcessRow[],
+  ledger: LedgerEntry[],
+  selfPid: number,
+  allow: string[]
+): { survivors: Survivor[]; reused: Set<number> } {
+  const owners = new Map<number, LedgerEntry>();
+  for (const entry of ledger) owners.set(entry.pid, entry);
+  const byPid = new Map(table.map(row => [row.pid, row]));
+  const own = ownSubtree(table, selfPid);
+  const reused = new Set<number>();
+  const survivors: Survivor[] = [];
+  for (const row of table) {
+    if (own.has(row.pid)) continue;
+    const owner = attribute(row, owners, byPid, reused);
+    if (!owner) continue;
+    survivors.push({ ...row, test: owner.test, via: owner.via, allowed: allow.includes(owner.test) });
+  }
+  return { survivors, reused };
+}
+
 function render(survivors: Survivor[], ledger: LedgerEntry[], allow: string[], reused: Set<number>): string {
   const lines = [
     `platform: ${process.platform}`,
@@ -234,19 +271,7 @@ function render(survivors: Survivor[], ledger: LedgerEntry[], allow: string[], r
 function main(): number {
   const options = parseArgs(process.argv.slice(2));
   const ledger = readLedger(options.ledger);
-  const owners = new Map<number, LedgerEntry>();
-  for (const entry of ledger) owners.set(entry.pid, entry);
-
-  const table = readProcessTable();
-  const byPid = new Map(table.map(row => [row.pid, row]));
-  const reused = new Set<number>();
-  const survivors: Survivor[] = [];
-  for (const row of table) {
-    if (row.pid === process.pid) continue;
-    const owner = attribute(row, owners, byPid, reused);
-    if (!owner) continue;
-    survivors.push({ ...row, test: owner.test, via: owner.via, allowed: options.allow.includes(owner.test) });
-  }
+  const { survivors, reused } = findSurvivors(readProcessTable(), ledger, process.pid, options.allow);
 
   const report = render(survivors, ledger, options.allow, reused);
   writeFileSync(options.out, report);
@@ -277,4 +302,4 @@ function main(): number {
   return 0;
 }
 
-process.exit(main());
+if (import.meta.main) process.exit(main());

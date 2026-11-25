@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { collectDescendantIdentities } from '../../src/shared/kill-process-tree.js';
 import { captureProcessStartToken } from '../../src/shared/process-identity.js';
+import { findSurvivors, type ProcessRow } from '../../scripts/tree-kill-survivor-census.js';
 
 /**
  * Tests for scripts/tree-kill-survivor-census.ts, the gate that decides whether
@@ -159,6 +160,27 @@ describe('tree-kill survivor census', () => {
     expect(result.report.survivors.map(entry => entry.pid)).not.toContain(root.pid!);
     expect(result.log).toContain(`reissued since, not charged to their test: ${root.pid!}`);
   }, 30_000);
+
+  it('does not charge its own process-table reader to a test whose PID it reissued', () => {
+    // Replays Windows run 44977430193: the CIM read's powershell.exe got PID 8104,
+    // a null-token ledger PID, and the census reported its own reader as a leak.
+    const censusPid = 1956;
+    const table: ProcessRow[] = [
+      { pid: censusPid, ppid: 500, image: 'bun.exe', commandLine: 'bun scripts/tree-kill-survivor-census.ts' },
+      { pid: 8104, ppid: censusPid, image: 'powershell.exe', commandLine: 'powershell.exe -Command Get-CimInstance' },
+      { pid: 7036, ppid: 8104, image: 'conhost.exe', commandLine: 'conhost.exe 0x4' },
+      { pid: 1084, ppid: 6576, image: 'PING.EXE', commandLine: 'ping -n 120 127.0.0.1' },
+    ];
+
+    const { survivors } = findSurvivors(table, [
+      { test: OWNER, role: 'descendant', pid: 8104, startToken: null },
+      { test: 'a genuine leaker', role: 'root', pid: 6576, startToken: null },
+    ], censusPid, []);
+
+    expect(survivors.map(entry => [entry.pid, entry.test, entry.via])).toEqual([
+      [1084, 'a genuine leaker', 'ancestor 6576'],
+    ]);
+  });
 
   it('fails on an empty ledger instead of reporting a clean draw', () => {
     const result = census([]);
