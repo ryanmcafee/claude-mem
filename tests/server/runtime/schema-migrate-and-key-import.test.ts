@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { createHash } from 'crypto';
 import type pg from 'pg';
+import type { QueryResult, QueryResultRow } from 'pg';
 import {
   SERVER_POSTGRES_SCHEMA_VERSION,
   SERVER_SCHEMA_BOOTSTRAP_LOCK_KEY,
@@ -19,17 +20,22 @@ import {
   normalizeImportedApiKey,
 } from '../../../src/server/runtime/api-key-import.js';
 import { logger } from '../../../src/utils/logger.js';
+import type { PostgresQueryable } from '../../../src/storage/postgres/utils.js';
 import { createIsolatedSchema, dropSchema, poolForSchema } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
+function queryResult(rows: QueryResultRow[] = []): QueryResult {
+  return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
+}
+
 describe('schema bootstrap serialization', () => {
   it('takes the transaction-scoped advisory lock before any DDL', async () => {
     const calls: { text: string; values?: unknown[] }[] = [];
-    const client = {
+    const client: PostgresQueryable = {
       async query(text: string, values?: unknown[]) {
         calls.push({ text, values });
-        return { rows: [], rowCount: 0 };
+        return queryResult();
       },
     };
 
@@ -54,7 +60,7 @@ describe('CLAUDE_MEM_SERVER_SCHEMA_BOOTSTRAP', () => {
   });
 
   it('refuses to boot without bootstrap when the version row is missing', async () => {
-    const pool = { async query() { return { rows: [], rowCount: 0 }; } };
+    const pool: PostgresQueryable = { async query() { return queryResult(); } };
     await expect(requireMigratedPostgresSchema(pool)).rejects.toThrow(/Run `server migrate`/);
   });
 
@@ -69,10 +75,10 @@ describe('CLAUDE_MEM_SERVER_SCHEMA_BOOTSTRAP', () => {
 
   it('reports the applied version without running DDL', async () => {
     const texts: string[] = [];
-    const pool = {
+    const pool: PostgresQueryable = {
       async query(text: string) {
         texts.push(text);
-        return { rows: [{ version: SERVER_POSTGRES_SCHEMA_VERSION, applied_at: new Date(0) }], rowCount: 1 };
+        return queryResult([{ version: SERVER_POSTGRES_SCHEMA_VERSION, applied_at: new Date(0) }]);
       },
     };
     const status = await requireMigratedPostgresSchema(pool);
