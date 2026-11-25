@@ -587,59 +587,8 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
       // metadata disclosure when an admin runs `api-key list` on a shared
       // host. Default page is 100; --team filters to a single tenant;
       // --active filters to usable (non-revoked, non-expired) keys.
-      const teamFilter = options.team ?? null;
-      const limitArg = Number.parseInt(options.limit ?? '100', 10);
-      const offsetArg = Number.parseInt(options.offset ?? '0', 10);
-      const limit = Number.isFinite(limitArg) && limitArg > 0 && limitArg <= 500
-        ? limitArg
-        : 100;
-      const offset = Number.isFinite(offsetArg) && offsetArg >= 0 ? offsetArg : 0;
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-      if (options.active) {
-        conditions.push('revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())');
-      }
-      if (teamFilter) {
-        params.push(teamFilter);
-        conditions.push(`team_id = $${params.length}`);
-      }
-      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      params.push(limit, offset);
-      // SECURITY: SELECT only non-secret metadata — never key_hash or any
-      // raw key material.
-      const result = await pool.query<{
-        id: string;
-        team_id: string | null;
-        project_id: string | null;
-        scopes: unknown;
-        revoked_at: Date | null;
-        expires_at: Date | null;
-        last_used_at: Date | null;
-        created_at: Date;
-      }>(
-        `SELECT id, team_id, project_id, scopes, revoked_at, expires_at, last_used_at, created_at
-         FROM api_keys
-         ${where}
-         ORDER BY created_at DESC
-         LIMIT $${params.length - 1} OFFSET $${params.length}`,
-        params,
-      );
-      console.log(JSON.stringify({
-        teamId: teamFilter,
-        limit,
-        offset,
-        count: result.rows.length,
-        keys: result.rows.map(row => ({
-          id: row.id,
-          teamId: row.team_id,
-          projectId: row.project_id,
-          scopes: row.scopes,
-          status: row.revoked_at ? 'revoked' : 'active',
-          lastUsedAt: row.last_used_at?.toISOString() ?? null,
-          expiresAt: row.expires_at?.toISOString() ?? null,
-          createdAt: row.created_at.toISOString(),
-        })),
-      }, null, 2));
+      const { listServerApiKeys } = await import('./api-key-list.js');
+      console.log(JSON.stringify(await listServerApiKeys(pool, options), null, 2));
       return;
     }
 
