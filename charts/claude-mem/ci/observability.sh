@@ -75,6 +75,18 @@ alert_firing() {
     | jq -e --arg name "$1" '.data.alerts[] | select(.labels.alertname == $name and .state == "firing")' >/dev/null
 }
 
+alertmanager_has() {
+  curl -fsS "$ALERTMANAGER/api/v2/alerts?active=true" \
+    | jq -e --arg name "$1" '.[] | select(.labels.alertname == $name)' >/dev/null
+}
+
+# Alertmanager drops an alert once it resolves, so confirm delivery while it is still firing.
+expect_delivered() {
+  wait_for "$1 delivered to Alertmanager" 120 alertmanager_has "$1"
+  curl -fsS "$ALERTMANAGER/api/v2/alerts?active=true" | jq -c --arg name "$1" \
+    '.[] | select(.labels.alertname == $name) | {alertname: .labels.alertname, severity: .labels.severity, startsAt, summary: .annotations.summary}'
+}
+
 post_events() {
   local count=$1 i
   for ((i = 0; i < count; i++)); do
@@ -128,18 +140,20 @@ wait_for "queue depth sampled" 60 prom_at_least "count(claude_mem_queue_jobs{$SE
 wait_for "HTTP latency recorded" 60 prom_at_least "sum(claude_mem_http_request_duration_seconds_count{$SERVER, route=\"/v1/events\"})" 8
 
 echo "== phase 2: provider outage fires ClaudeMemGenerationFailureRatio"
-kubectl -n "$NAMESPACE" exec deploy/mock-provider -- curl -fsS -X POST http://127.0.0.1:8080/mode/fail
+kubectl -n "$NAMESPACE" exec deploy/mock-provider -- curl -fsS -o /dev/null -X POST http://127.0.0.1:8080/mode/fail
 provider_status=$(kubectl -n "$NAMESPACE" exec "deploy/$FULLNAME-worker" -- \
   curl -sS -o /dev/null -w '%{http_code}' -X POST http://mock-provider:8080/v1/chat/completions)
 [[ "$provider_status" == 503 ]] || fail "mock provider answered $provider_status after switching to fail mode"
 post_events 8
 wait_for "ClaudeMemGenerationFailureRatio firing" 420 alert_firing ClaudeMemGenerationFailureRatio
+expect_delivered ClaudeMemGenerationFailureRatio
 
 echo "== phase 3: no worker fires ClaudeMemQueueBacklogGrowing"
 kubectl -n "$NAMESPACE" scale "deploy/$FULLNAME-worker" --replicas=0
 kubectl -n "$NAMESPACE" wait pod -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=worker" --for=delete --timeout=3m
 post_events 10
 wait_for "ClaudeMemQueueBacklogGrowing firing" 420 alert_firing ClaudeMemQueueBacklogGrowing
+expect_delivered ClaudeMemQueueBacklogGrowing
 
 echo "== phase 4: database outage fires ClaudeMemHttpErrorRatio"
 kubectl -n "$NAMESPACE" annotate cluster pg --overwrite cnpg.io/hibernation=on
@@ -152,6 +166,7 @@ http_errors() {
   alert_firing ClaudeMemHttpErrorRatio
 }
 wait_for "ClaudeMemHttpErrorRatio firing" 420 http_errors
+expect_delivered ClaudeMemHttpErrorRatio
 
 echo "== dashboard: every panel returns data through Grafana"
 GRAFANA_AUTH="admin:$(kubectl -n "$MONITORING" get secret kps-grafana -o jsonpath='{.data.admin-password}' | base64 -d)"
@@ -178,13 +193,7 @@ done < /tmp/panels.jsonl
 echo "== phase 5: no server fires ClaudeMemServerDown"
 kubectl -n "$NAMESPACE" scale "deploy/$FULLNAME-server" --replicas=0
 wait_for "ClaudeMemServerDown firing" 300 alert_firing ClaudeMemServerDown
-
-echo "== Alertmanager received every alert"
-received=$(curl -fsS "$ALERTMANAGER/api/v2/alerts" | jq -r '[.[].labels.alertname | select(startswith("ClaudeMem"))] | unique | join(" ")')
-echo "alertmanager: $received"
-for alert in ClaudeMemServerDown ClaudeMemQueueBacklogGrowing ClaudeMemGenerationFailureRatio ClaudeMemHttpErrorRatio; do
-  grep -qw "$alert" <<<"$received" || fail "$alert never reached Alertmanager"
-done
+expect_delivered ClaudeMemServerDown
 
 echo "== metric names and alert thresholds as deployed"
 curl -fsS "$PROM/api/v1/label/__name__/values" | jq -r '.data[] | select(startswith("claude_mem_"))'
