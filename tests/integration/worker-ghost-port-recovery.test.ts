@@ -476,15 +476,14 @@ describe.if(RUN_GATE && IS_WINDOWS)('worker recovers from a ghost listener left 
     }
     if (state.kind === 'malformed') {
       const describeOwner = (pid: number) => `${pid}${processExists(pid) ? ' (alive)' : ' (dead)'}`;
-      expect(
-        state.kind,
+      throw new Error(
         `post-kill state is malformed (${state.reason}): port ${fixture.port} owners=` +
           `[${finalOwners.map(describeOwner).join(',')}] (fixture was ${fixture.pid}), sidecar chain ` +
           `${survivorsAfterKill.length > 0 ? 'survived' : 'died'} ` +
           `(${describeProcesses(survivorsAfterKill.length > 0 ? survivorsAfterKill : snapshot)}). ` +
           'Not the bun >= 1.4 capability signature — failing instead of skipping, because these ' +
           'states would pass the gate without exercising recovery.'
-      ).toBe('ghost');
+      );
     }
     expect(ownerUnderDeadPid, 'port must be LISTENING under the dead fixture PID (ghost)').toBe(true);
     expect(processExists(fixture.pid)).toBe(false);

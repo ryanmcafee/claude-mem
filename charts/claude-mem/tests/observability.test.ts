@@ -18,7 +18,7 @@ const REQUIRED = ['database.existingSecret=pg-app', 'redis.url=redis://valkey:63
 const ALL_ON = ['metrics.serviceMonitor.enabled=true', 'metrics.prometheusRule.enabled=true', 'metrics.dashboard.enabled=true'];
 
 interface EnvVar { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }
-interface Port { name: string; port?: number; containerPort?: number }
+interface Port { name: string; port?: number; containerPort?: number; protocol?: string }
 interface Container { name: string; env?: EnvVar[]; ports?: Port[] }
 interface Manifest {
   kind: string;
@@ -28,7 +28,7 @@ interface Manifest {
     ports?: Port[];
     ingress?: Array<{ ports?: Array<{ port: string }>; from?: unknown[] }>;
     selector?: { matchLabels?: Record<string, string>; matchExpressions?: Array<{ key: string; values: string[] }> };
-    endpoints?: Array<{ port: string; path: string }>;
+    endpoints?: Array<{ port: string; path: string; interval?: string; scrapeTimeout?: string }>;
     groups?: Array<{ name: string; rules: Array<{ alert: string; expr: string; annotations: Record<string, string> }> }>;
     template?: { spec: { containers: Container[] } };
   };
