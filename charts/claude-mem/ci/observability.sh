@@ -17,7 +17,29 @@ ALERTMANAGER=http://127.0.0.1:9093
 API=http://127.0.0.1:37877
 PIDS=()
 
-fail() { echo "OBSERVABILITY FAILED: $*" >&2; exit 1; }
+dump_prometheus() {
+  local query
+  echo "== Prometheus state at failure" >&2
+  for query in 'claude_mem_generation_attempts_total' 'claude_mem_queue_jobs' 'up' \
+    'sum(rate(claude_mem_generation_attempts_total{outcome="failed"}[2m]))' \
+    'sum(increase(claude_mem_generation_attempts_total[2m]))'; do
+    echo "-- $query" >&2
+    curl -sS "$PROM/api/v1/query" --data-urlencode "query=$query" \
+      | jq -c '.data.result[]? | {metric, value}' >&2 || true
+  done
+  echo "-- rules" >&2
+  curl -sS "$PROM/api/v1/rules" \
+    | jq -c '.data.groups[]? | .rules[] | {name, state, health, lastError}' >&2 || true
+  echo "-- worker /metrics" >&2
+  kubectl -n "$NAMESPACE" exec "deploy/$FULLNAME-worker" -- curl -sS http://127.0.0.1:9464/metrics 2>&1 \
+    | grep claude_mem_generation >&2 || true
+  echo "-- generation jobs by status" >&2
+  kubectl -n "$NAMESPACE" exec pg-1 -c postgres -- psql -U postgres -d app -tAc \
+    "SELECT status, attempts, left(coalesce(last_error::text, ''), 120), count(*) FROM observation_generation_jobs GROUP BY 1, 2, 3" \
+    >&2 || true
+}
+
+fail() { echo "OBSERVABILITY FAILED: $*" >&2; dump_prometheus; exit 1; }
 cleanup() { for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 
