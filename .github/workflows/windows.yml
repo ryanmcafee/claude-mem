@@ -231,3 +231,14 @@ jobs:
             Where-Object { $_.Name -match '^(uv|uvx|python)(\.exe)?$' } |
             Select-Object ProcessId, ParentProcessId, Name, CreationDate |
             Format-Table -AutoSize
+
+      - name: Upload claude-mem logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chroma-lifecycle-logs-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\claude-mem-data\logs
+            ${{ runner.temp }}\claude-mem-ghost-data\logs
+          if-no-files-found: ignore
+          retention-days: 7
