@@ -20,22 +20,24 @@ const realHealthMonitorSnapshot = { ...realHealthMonitor };
 const realWorkerSpawnGateSnapshot = { ...realWorkerSpawnGate };
 const realPortReclaimSnapshot = { ...realPortReclaim };
 
+// Every fake is typed against the real export it replaces, so a production
+// signature change breaks the suite instead of silently bypassing it.
 const processManager = {
-  cleanStalePidFile: mock(() => 'dead' as 'alive' | 'dead'),
-  getPlatformTimeout: mock((timeout: number) => timeout),
-  spawnDaemon: mock(() => 2147483647),
-  touchPidFile: mock(() => {}),
+  cleanStalePidFile: mock<typeof realProcessManager.cleanStalePidFile>(() => 'stale'),
+  getPlatformTimeout: mock<typeof realProcessManager.getPlatformTimeout>(timeout => timeout),
+  spawnDaemon: mock<typeof realProcessManager.spawnDaemon>(() => 2147483647),
+  touchPidFile: mock<typeof realProcessManager.touchPidFile>(() => {}),
 };
 
 const healthMonitor = {
-  isPortInUse: mock(async () => false),
-  waitForHealth: mock(async () => false),
-  waitForReadiness: mock(async () => false),
+  isPortInUse: mock<typeof realHealthMonitor.isPortInUse>(async () => false),
+  waitForHealth: mock<typeof realHealthMonitor.waitForHealth>(async () => false),
+  waitForReadiness: mock<typeof realHealthMonitor.waitForReadiness>(async () => false),
 };
 
 const spawnGate = {
-  acquireSpawnLock: mock(() => true),
-  releaseSpawnLock: mock(() => {}),
+  acquireSpawnLock: mock<typeof realWorkerSpawnGate.acquireSpawnLock>(() => true),
+  releaseSpawnLock: mock<typeof realWorkerSpawnGate.releaseSpawnLock>(() => {}),
 };
 
 // port-reclaim must be stubbed like the rest of the module graph: its
@@ -44,10 +46,9 @@ const spawnGate = {
 // below. The ghost-recovery behavior itself has dedicated unit coverage in
 // tests/shared/port-reclaim.test.ts and a Windows integration gate.
 const portReclaim = {
-  reclaimGhostListeningPort: mock(async () => ({
+  reclaimGhostListeningPort: mock<typeof realPortReclaim.reclaimGhostListeningPort>(async () => ({
     reclaimed: false,
     reason: 'not-supported',
-    killedPids: [] as number[],
   })),
 };
 
@@ -65,7 +66,7 @@ afterAll(() => {
 
 const { ensureWorkerStarted } = await import('../../src/services/worker-spawner.js');
 
-type TimedProbe = (port: number, timeout: number) => Promise<boolean>;
+type TimedProbe = typeof realHealthMonitor.waitForHealth;
 
 async function modelBaseLivePidResult(
   port: number,
@@ -91,7 +92,7 @@ async function modelBaseSpawnResult(
 
 function resetMocks(): void {
   processManager.cleanStalePidFile.mockReset();
-  processManager.cleanStalePidFile.mockReturnValue('dead');
+  processManager.cleanStalePidFile.mockReturnValue('stale');
   processManager.getPlatformTimeout.mockClear();
   processManager.spawnDaemon.mockReset();
   processManager.spawnDaemon.mockReturnValue(2147483647);
@@ -111,7 +112,7 @@ describe('ensureWorkerStarted startup readiness', () => {
   it('returns ready for a live PID when base would have warmed after the old 3s gate', async () => {
     resetMocks();
     const port = 39001;
-    const becomesReadyOnlyAtReadinessBudget: TimedProbe = async (_port, timeout) =>
+    const becomesReadyOnlyAtReadinessBudget: TimedProbe = async (_port, timeout = 0) =>
       timeout >= HOOK_TIMEOUTS.READINESS_WAIT;
 
     processManager.cleanStalePidFile.mockReturnValue('alive');
@@ -136,7 +137,7 @@ describe('ensureWorkerStarted startup readiness', () => {
   it('returns ready after spawn when base would have warmed after the old 15s gate', async () => {
     resetMocks();
     const port = 39002;
-    const becomesReadyOnlyAtReadinessBudget: TimedProbe = async (_port, timeout) =>
+    const becomesReadyOnlyAtReadinessBudget: TimedProbe = async (_port, timeout = 0) =>
       timeout >= HOOK_TIMEOUTS.READINESS_WAIT;
 
     healthMonitor.waitForHealth.mockImplementation(becomesReadyOnlyAtReadinessBudget);
@@ -163,7 +164,7 @@ describe('ensureWorkerStarted startup readiness', () => {
     let cleanChecks = 0;
     processManager.cleanStalePidFile.mockImplementation(() => {
       cleanChecks += 1;
-      return cleanChecks === 1 ? 'alive' : 'dead';
+      return cleanChecks === 1 ? 'alive' : 'stale';
     });
 
     const result = await ensureWorkerStarted(39003, import.meta.filename);

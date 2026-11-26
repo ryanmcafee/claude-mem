@@ -13,6 +13,7 @@ import {
   deriveMacKeychainServiceName,
   readMacOsKeychain,
   sanitizeMacOsKeychainAccount,
+  type KeychainExec,
 } from '../../src/shared/oauth-token.js';
 import { paths, CLAUDE_CONFIG_DIR, DEFAULT_CLAUDE_CONFIG_DIR } from '../../src/shared/paths.js';
 import { buildIsolatedEnvWithFreshOAuth } from '../../src/shared/EnvManager.js';
@@ -423,7 +424,7 @@ describe('readMacOsKeychain with an injected execImpl (#2753)', () => {
       claudeAiOauth: { accessToken: 'sk-ant-oat01-instance-token', expiresAt: futureExpiresAt },
     });
 
-    const fakeExecImpl = mock((_cmd: string, args: readonly string[]) => {
+    const fakeExecImpl = mock<KeychainExec>((_cmd, args) => {
       const serviceArgIndex = args.indexOf('-s');
       const serviceName = serviceArgIndex >= 0 ? args[serviceArgIndex + 1] : undefined;
       if (serviceName === instanceServiceName) {
@@ -434,7 +435,7 @@ describe('readMacOsKeychain with an injected execImpl (#2753)', () => {
       return Promise.reject(new Error(
         'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.'
       ));
-    }) as any;
+    });
 
     const defaultResult = await readMacOsKeychain('Claude Code-credentials', fakeExecImpl);
     expect(defaultResult.kind).toBe('absent');
@@ -489,8 +490,8 @@ describe('readClaudeOAuthToken (#2753) — darwin dispatch wires the derived ser
     settingsPathSpy = spyOn(paths, 'settings').mockImplementation(() => settingsPath);
   }
 
-  function fakeExecFor(expectedServiceName: string, payload: string): any {
-    return mock((_cmd: string, args: readonly string[]) => {
+  function fakeExecFor(expectedServiceName: string, payload: string) {
+    return mock<KeychainExec>((_cmd, args) => {
       const serviceArgIndex = args.indexOf('-s');
       const serviceName = serviceArgIndex >= 0 ? args[serviceArgIndex + 1] : undefined;
       if (serviceName === expectedServiceName) {
@@ -515,7 +516,7 @@ describe('readClaudeOAuthToken (#2753) — darwin dispatch wires the derived ser
     const result = await readClaudeOAuthToken(fakeExecImpl);
 
     expect(fakeExecImpl).toHaveBeenCalledTimes(1);
-    const callArgs = fakeExecImpl.mock.calls[0][1] as string[];
+    const callArgs = fakeExecImpl.mock.calls[0][1];
     expect(callArgs).toContain(expectedServiceName);
     expect(callArgs).not.toContain('Claude Code-credentials');
     expect(result.kind).toBe('present');
@@ -546,7 +547,7 @@ describe('readClaudeOAuthToken (#2753) — darwin dispatch wires the derived ser
     const result = await readClaudeOAuthToken(fakeExecImpl);
 
     expect(fakeExecImpl).toHaveBeenCalledTimes(1);
-    const callArgs = fakeExecImpl.mock.calls[0][1] as string[];
+    const callArgs = fakeExecImpl.mock.calls[0][1];
     expect(callArgs).toContain(expectedServiceName);
     expect(result.kind).toBe('present');
     if (result.kind === 'present') {
@@ -585,7 +586,7 @@ describe('readMacOsKeychain (#4037) — keychain -a account follows Claude Code 
   });
 
   function fakeExecForAccount(expectedAccount: string) {
-    return mock((_cmd: string, args: readonly string[]) => {
+    return mock<KeychainExec>((_cmd, args) => {
       const accountArgIndex = args.indexOf('-a');
       const account = accountArgIndex >= 0 ? args[accountArgIndex + 1] : undefined;
       if (account === expectedAccount) {
@@ -604,7 +605,7 @@ describe('readMacOsKeychain (#4037) — keychain -a account follows Claude Code 
     );
 
     expect(fakeExecImpl).toHaveBeenCalledTimes(1);
-    const callArgs = fakeExecImpl.mock.calls[0][1] as string[];
+    const callArgs = fakeExecImpl.mock.calls[0][1];
     expect(callArgs[callArgs.indexOf('-a') + 1]).toBe('claude-code-user');
     expect(callArgs).not.toContain('first.last@example.com');
     expect(result.kind).toBe('present');
@@ -622,7 +623,7 @@ describe('readMacOsKeychain (#4037) — keychain -a account follows Claude Code 
     );
 
     expect(fakeExecImpl).toHaveBeenCalledTimes(1);
-    const callArgs = fakeExecImpl.mock.calls[0][1] as string[];
+    const callArgs = fakeExecImpl.mock.calls[0][1];
     expect(callArgs[callArgs.indexOf('-a') + 1]).toBe('alex.newman');
     expect(callArgs).not.toContain('claude-code-user');
     expect(result.kind).toBe('present');

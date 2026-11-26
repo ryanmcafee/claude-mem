@@ -9,6 +9,7 @@ import {
   classifyHttpProviderError,
 } from './shared/error-classification.js';
 import { buildServerGenerationPrompt } from './shared/prompt-builder.js';
+import type { FetchLike } from '../../../shared/fetch-like.js';
 import type {
   ServerGenerationContext,
   ServerGenerationProvider,
@@ -31,7 +32,7 @@ export interface OpenRouterObservationProviderOptions {
   maxOutputTokens?: number;
   siteUrl?: string;
   appName?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
 }
 
 interface OpenRouterResponse {
@@ -48,7 +49,7 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
   private readonly maxOutputTokens: number;
   private readonly siteUrl: string;
   private readonly appName: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: FetchLike;
 
   constructor(options: OpenRouterObservationProviderOptions) {
     if (!options.apiKey) {

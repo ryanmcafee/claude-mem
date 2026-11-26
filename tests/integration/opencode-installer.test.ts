@@ -12,6 +12,7 @@ import {
   registerOpenCodePluginInConfig,
 } from '../../src/services/integrations/OpenCodeInstaller.js';
 import { logger } from '../../src/utils/logger.js';
+import { mockFetch } from '../helpers/fetch-mock';
 
 describe('OpenCode installer config registration', () => {
   let tempDir: string;
@@ -146,10 +147,10 @@ describe('OpenCode installer context retrieval', () => {
   function stubWorkerContext(body: unknown, diagnostics: string[]): void {
     logger.debug = (_component, message) => diagnostics.push(message);
     logger.info = () => {};
-    globalThis.fetch = async (input) => ({
+    globalThis.fetch = mockFetch(async (input) => ({
       ok: true,
       text: async () => input.toString().includes('/api/context/inject') ? body : '',
-    }) as Response;
+    }) as Response);
   }
 
   it('rejects a wrapped object body without coercion or unavailable-worker diagnostics', async () => {

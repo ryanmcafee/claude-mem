@@ -67,6 +67,8 @@ describe('CloudSyncRoutes — GET /api/sync/status', () => {
       deviceId: 'device-fixture',
       pending: { observations: 0, summaries: 0, prompts: 0, mutations: 0, tombstones: 0 },
       quarantine: { count: 0, latestReason: null },
+      authError: null,
+      health: { state: 'ok', message: null, consecutiveFailures: 0, failingSinceAt: null },
       lastFlushAt: 1751990400000,
       lastError: null,
       hub: {

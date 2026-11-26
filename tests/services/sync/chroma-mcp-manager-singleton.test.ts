@@ -11,7 +11,7 @@ import path from 'node:path';
 import * as realSettingsDefaultsManager from '../../../src/shared/SettingsDefaultsManager.js';
 import * as realPaths from '../../../src/shared/paths.js';
 import * as realLogger from '../../../src/utils/logger.js';
-import * as realSupervisor from '../../../src/supervisor/index.ts';
+import * as realSupervisor from '../../../src/supervisor/index.js';
 import * as realEnvSanitizer from '../../../src/supervisor/env-sanitizer.js';
 import * as realKillProcessTree from '../../../src/shared/kill-process-tree.js';
 import * as realSdkClientStdio from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -280,6 +280,8 @@ mock.module('child_process', () => {
 // Stub process.kill so the tree-kill path can record targets without crashing
 // the test runner if the synthetic PID happens to collide with a real one.
 const realProcessKill = process.kill.bind(process);
+const isSignal = (signal: string | number | undefined): signal is NodeJS.Signals =>
+  typeof signal === 'string' && signal in os.constants.signals;
 const stubbedProcessKill = ((pid: number, signal?: string | number) => {
   if (signal === 0 && deadPids.has(pid)) {
     const error = new Error('ESRCH') as NodeJS.ErrnoException;
@@ -293,7 +295,7 @@ const stubbedProcessKill = ((pid: number, signal?: string | number) => {
   if (transportKillEmitsOnclose) {
     const transport = transportInstances.find(instance => instance._process.pid === pid);
     if (transport && transport._process.exitCode === null && transport._process.signalCode === null) {
-      transport._process.finish(null, typeof signal === 'string' ? signal : null);
+      transport._process.finish(null, isSignal(signal) ? signal : null);
       transport.onclose?.();
     }
   }
@@ -609,21 +611,21 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
 
   it('does not reconnect an active mutation after shutdown starts', async () => {
     const mgr = ChromaMcpManager.getInstance();
-    let rejectMutation: ((error: Error) => void) | null = null;
+    const mutation = Promise.withResolvers<never>();
+    let mutationStarted = false;
     callToolImpl = async request => {
       if (request?.name === 'chroma_add_documents') {
-        return new Promise((_resolve, reject) => {
-          rejectMutation = reject;
-        });
+        mutationStarted = true;
+        return mutation.promise;
       }
       return { content: [{ type: 'text', text: '{}' }] };
     };
 
     const pendingMutation = mgr.callTool('chroma_add_documents', { ids: ['one'] });
-    await waitForCondition(() => rejectMutation !== null && transportInstances.length === 1);
+    await waitForCondition(() => mutationStarted && transportInstances.length === 1);
 
     await mgr.stop();
-    rejectMutation?.(new Error('Connection closed'));
+    mutation.reject(new Error('Connection closed'));
 
     await expect(pendingMutation).rejects.toThrow('call cancelled during shutdown');
     expect(transportInstances.length).toBe(1);
@@ -848,13 +850,11 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
 
   it('keeps the writer lock until unexpected-close tree cleanup finishes', async () => {
     const cleanupStartedForPids: number[] = [];
-    let finishCleanup: (() => void) | null = null;
+    const cleanup = Promise.withResolvers<void>();
 
     killProcessTreeOverride = async (pid: number) => {
       cleanupStartedForPids.push(pid);
-      await new Promise<void>((resolve) => {
-        finishCleanup = resolve;
-      });
+      await cleanup.promise;
     };
 
     try {
@@ -869,10 +869,10 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
       await waitForCondition(() => cleanupStartedForPids.includes(firstPid));
       expect(existsSync(chromaWriterLockPath())).toBe(true);
 
-      finishCleanup?.();
+      cleanup.resolve();
       await waitForCondition(() => !existsSync(chromaWriterLockPath()));
     } finally {
-      finishCleanup?.();
+      cleanup.resolve();
       killProcessTreeOverride = null;
     }
   });

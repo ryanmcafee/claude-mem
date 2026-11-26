@@ -63,16 +63,14 @@ function newSync(): ChromaSync {
 describe('ChromaSync duplicate-ID reconcile', () => {
   it('coalesces concurrent collection creation into one Chroma mutation', async () => {
     const sync = new ChromaSync('project');
-    let releaseCreation: (() => void) | null = null;
-    createCollectionImpl = async () => new Promise<void>(resolve => {
-      releaseCreation = resolve;
-    });
+    const creation = Promise.withResolvers<void>();
+    createCollectionImpl = () => creation.promise;
 
     const creations = Array.from({ length: 50 }, () => sync.ensureCollectionExists());
     await Promise.resolve();
 
     expect(calls.filter(call => call.tool === 'chroma_create_collection')).toHaveLength(1);
-    releaseCreation?.();
+    creation.resolve();
     await Promise.all(creations);
     await sync.ensureCollectionExists();
 

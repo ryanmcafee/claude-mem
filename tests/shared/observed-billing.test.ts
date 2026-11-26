@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { claudeJsonPath, detectObservedBilling } from '../../src/shared/observed-billing.js';
+import { claudeJsonPath, detectObservedBilling, type ObservedBilling } from '../../src/shared/observed-billing.js';
 
 // A realistic key shape; only its last 20 chars are ever compared.
 const API_KEY = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAA-BBBBBBBBBBBBBBBBBBBB';
@@ -90,7 +90,8 @@ describe('detectObservedBilling — subscription account', () => {
   });
 
   it('recognizes every known tier: max / pro / team / enterprise', () => {
-    for (const tier of ['max', 'pro', 'team', 'enterprise']) {
+    const tiers: ObservedBilling[] = ['max', 'pro', 'team', 'enterprise'];
+    for (const tier of tiers) {
       writeClaudeJson({ oauthAccount: { organizationType: `claude_${tier}` } });
       expect(detectObservedBilling({}, claudeJsonFile)).toBe(tier);
     }

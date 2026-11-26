@@ -3,6 +3,8 @@ import { logger } from '../../src/utils/logger.js';
 
 import { Server } from '../../src/services/server/Server.js';
 import type { RouteHandler, ServerOptions } from '../../src/services/server/Server.js';
+import { readJson } from '../helpers/http-json.js';
+import type { ErrorBody, HealthBody, ReadinessBody, VersionBody } from '../helpers/server-core-routes.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
 
@@ -92,7 +94,7 @@ describe('Server', () => {
       expect(response.status).toBe(200);
       expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:37777');
 
-      const body = await response.json();
+      const body = await readJson<{ bodyParsed: boolean }>(response);
       expect(body.bodyParsed).toBe(false);
     });
   });
@@ -256,7 +258,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<HealthBody>(response);
       expect(body.status).toBe('ok');
     });
 
@@ -267,7 +269,7 @@ describe('Server', () => {
       await server.listen(testPort, '127.0.0.1');
 
       const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      const body = await response.json();
+      const body = await readJson<HealthBody>(response);
 
       expect(body.initialized).toBe(true);
       expect(body.mcpReady).toBe(true);
@@ -290,13 +292,13 @@ describe('Server', () => {
       await server.listen(testPort, '127.0.0.1');
 
       let response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      let body = await response.json();
+      let body = await readJson<HealthBody>(response);
       expect(body.initialized).toBe(false);
 
       isInitialized = true;
 
       response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      body = await response.json();
+      body = await readJson<HealthBody>(response);
       expect(body.initialized).toBe(true);
     });
 
@@ -307,7 +309,7 @@ describe('Server', () => {
       await server.listen(testPort, '127.0.0.1');
 
       const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      const body = await response.json();
+      const body = await readJson<HealthBody>(response);
 
       expect(body.platform).toBeDefined();
       expect(body.pid).toBeDefined();
@@ -334,11 +336,11 @@ describe('Server', () => {
       await server.listen(testPort, '127.0.0.1');
 
       const response = await fetch(`http://127.0.0.1:${testPort}/api/health`);
-      const body = await response.json();
+      const body = await readJson<HealthBody>(response);
 
       expect(response.status).toBe(503);
       expect(body.status).toBe('degraded');
-      expect(body.queue.redis.status).toBe('error');
+      expect(body.queue?.redis.status).toBe('error');
     });
   });
 
@@ -353,7 +355,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<ReadinessBody>(response);
       expect(body.status).toBe('ready');
     });
 
@@ -376,7 +378,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(503);
 
-      const body = await response.json();
+      const body = await readJson<ReadinessBody>(response);
       expect(body.status).toBe('initializing');
       expect(body.message).toBeDefined();
     });
@@ -393,7 +395,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(200);
 
-      const body = await response.json();
+      const body = await readJson<VersionBody>(response);
       expect(body.version).toBeDefined();
       expect(typeof body.version).toBe('string');
     });
@@ -411,7 +413,7 @@ describe('Server', () => {
 
       expect(response.status).toBe(404);
 
-      const body = await response.json();
+      const body = await readJson<ErrorBody>(response);
       expect(body.error).toBe('NotFound');
     });
   });

@@ -24,6 +24,7 @@ import {
   ServerClientError,
   isServerClientError,
 } from '../../src/services/hooks/server-client.js';
+import { mockFetch, requestUrl } from '../helpers/fetch-mock';
 
 interface CapturedRequest {
   url: string;
@@ -38,7 +39,7 @@ const originalFetch = globalThis.fetch;
 function installFetch(handler: (req: CapturedRequest) => Response | Promise<Response>): void {
   // Reset capture buffer for each test.
   captured = [];
-  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+  globalThis.fetch = mockFetch(async (url, init = {}) => {
     const headers: Record<string, string> = {};
     const rawHeaders = init.headers ?? {};
     if (Array.isArray(rawHeaders)) {
@@ -49,10 +50,10 @@ function installFetch(handler: (req: CapturedRequest) => Response | Promise<Resp
       }
     }
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
-    const req: CapturedRequest = { url, method: String(init.method ?? 'GET'), headers, body };
+    const req: CapturedRequest = { url: requestUrl(url), method: String(init.method ?? 'GET'), headers, body };
     captured.push(req);
     return handler(req);
-  }) as typeof globalThis.fetch;
+  });
 }
 
 describe('ServerClient', () => {
@@ -133,9 +134,9 @@ describe('ServerClient', () => {
   });
 
   it('throws transport error on fetch failure', async () => {
-    globalThis.fetch = (async () => {
+    globalThis.fetch = mockFetch(async () => {
       throw new Error('ECONNREFUSED');
-    }) as typeof globalThis.fetch;
+    });
     const client = new ServerClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
     let caught: unknown;
     try {

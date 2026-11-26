@@ -10,7 +10,8 @@ import type {
   SdkSessionRecord,
   SessionSummaryRecord,
   UserPromptRecord,
-  ExportData
+  ExportData,
+  SearchExportResponse
 } from './types/export.js';
 
 const WORKER_FETCH_TIMEOUT_MS = 30_000;
@@ -47,6 +48,15 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
+/**
+ * `Response.json()` resolves to `unknown`. Stating the worker's response shape
+ * at the call site keeps the one unchecked conversion here instead of leaving
+ * every field access untyped.
+ */
+async function readJsonBody<T>(response: Response): Promise<T> {
+  return (await response.json()) as T;
+}
+
 export async function exportMemories(query: string, outputFile: string, project?: string) {
   const settings = SettingsDefaultsManager.loadFromFile(join(resolveDataDir(), 'settings.json'));
   const port = parseWorkerPort(settings.CLAUDE_MEM_WORKER_PORT);
@@ -66,7 +76,7 @@ export async function exportMemories(query: string, outputFile: string, project?
   if (!searchResponse.ok) {
     throw new Error(`Failed to search: ${searchResponse.status} ${searchResponse.statusText}`);
   }
-  const searchData = await searchResponse.json();
+  const searchData = await readJsonBody<SearchExportResponse>(searchResponse);
 
   const observations: ObservationRecord[] = searchData.observations || [];
   const summaries: SessionSummaryRecord[] = searchData.sessions || [];
@@ -93,7 +103,7 @@ export async function exportMemories(query: string, outputFile: string, project?
       body: JSON.stringify({ memorySessionIds: Array.from(memorySessionIds) })
     });
     if (sessionsResponse.ok) {
-      sessions = await sessionsResponse.json();
+      sessions = await readJsonBody<SdkSessionRecord[]>(sessionsResponse);
     } else {
       const body = await sessionsResponse.text();
       throw new Error(`Failed to fetch SDK sessions: ${sessionsResponse.status} ${sessionsResponse.statusText} ${body}`.trim());

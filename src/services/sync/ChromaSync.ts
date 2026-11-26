@@ -49,7 +49,7 @@ export interface MergedIntoProjectTarget {
   sqliteId: number;
 }
 
-interface StoredObservation {
+export interface StoredObservation {
   id: number;
   memory_session_id: string;
   project: string;

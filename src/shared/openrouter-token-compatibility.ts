@@ -1,3 +1,5 @@
+import type { FetchLike } from './fetch-like.js';
+
 export function isMaxCompletionTokensCompatibilityError(status: number, bodyText: string): boolean {
   let error: Record<string, unknown> | undefined;
   try {
@@ -23,7 +25,7 @@ export function isMaxCompletionTokensCompatibilityError(status: number, bodyText
 }
 
 export async function fetchWithOpenRouterTokenCompatibility(
-  fetchImpl: typeof fetch,
+  fetchImpl: FetchLike,
   input: string | URL | Request,
   init: RequestInit,
   body: Record<string, unknown>,

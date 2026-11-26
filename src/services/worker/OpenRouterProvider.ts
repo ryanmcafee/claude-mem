@@ -178,7 +178,7 @@ export function classifyOpenRouterError(input: {
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const OPENROUTER_EMPTY_HISTORY_FALLBACK = '(context unavailable)';
 
-interface OpenAIMessage {
+export interface OpenAIMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
@@ -440,7 +440,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
     };
   }
 
-  private conversationToOpenAIMessages(history: ConversationMessage[]): OpenAIMessage[] {
+  protected conversationToOpenAIMessages(history: ConversationMessage[]): OpenAIMessage[] {
     let newestNonEmptyContent: string | null = null;
     for (const msg of history) {
       const trimmed = msg.content.trim();

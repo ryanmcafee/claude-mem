@@ -4,7 +4,8 @@ import { SessionManager } from '../../src/services/worker/SessionManager.js';
 import { processAgentResponse } from '../../src/services/worker/agents/ResponseProcessor.js';
 import type { ActiveSession } from '../../src/services/worker-types.js';
 import type { DatabaseManager } from '../../src/services/worker/DatabaseManager.js';
-import type { StorageResult, WorkerRef } from '../../src/services/worker/agents/types.js';
+import type { WorkerRef } from '../../src/services/worker/agents/types.js';
+import type { SessionStore } from '../../src/services/sqlite/SessionStore.js';
 
 mock.module('../../src/services/worker-service.js', () => ({
   updateCursorContextForProject: () => Promise.resolve(),
@@ -50,11 +51,15 @@ const durableSessionTemplate = {
   memory_session_id: 'memory-123',
 };
 
-function makeDbManager(storeObservations = mock(() => ({
-  observationIds: [1],
-  summaryId: null,
-  createdAtEpoch: 1700000000000,
-} as StorageResult)), project = 'repo-a'): DatabaseManager {
+function mockStoreObservations() {
+  return mock<SessionStore['storeObservations']>(() => ({
+    observationIds: [1],
+    summaryId: null,
+    createdAtEpoch: 1700000000000,
+  }));
+}
+
+function makeDbManager(storeObservations = mockStoreObservations(), project = 'repo-a'): DatabaseManager {
   return {
     getSessionById: () => ({
       ...durableSessionTemplate,
@@ -113,11 +118,7 @@ describe('SessionManager prompt project attribution', () => {
   });
 
   it('attributes a prompt-2 observation to its current project and preserves durable identity', async () => {
-    const storeObservations = mock(() => ({
-      observationIds: [1],
-      summaryId: null,
-      createdAtEpoch: 1700000000000,
-    } as StorageResult));
+    const storeObservations = mockStoreObservations();
     const dbManager = makeDbManager(storeObservations);
     const sessionManager = new SessionManager(dbManager);
     sessionManager.initializeSession(1, 'prompt 1', 1);
