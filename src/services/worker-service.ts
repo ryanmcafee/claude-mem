@@ -1492,6 +1492,13 @@ async function main() {
       process.exit(0);
     }
 
+    case 'import': {
+      const { runImportCommand } = await import('../cli/import-command.js');
+      const exitCode = await runImportCommand(commandArgs);
+      process.exit(exitCode);
+      break;
+    }
+
     case 'cleanup': {
       const dryRun = process.argv.includes('--dry-run');
       const counts = runOneTimeV12_4_3Cleanup(undefined, { dryRun });
