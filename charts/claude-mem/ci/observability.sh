@@ -128,8 +128,10 @@ wait_for "queue depth sampled" 60 prom_at_least "count(claude_mem_queue_jobs{$SE
 wait_for "HTTP latency recorded" 60 prom_at_least "sum(claude_mem_http_request_duration_seconds_count{$SERVER, route=\"/v1/events\"})" 8
 
 echo "== phase 2: provider outage fires ClaudeMemGenerationFailureRatio"
-kubectl -n "$NAMESPACE" set env deploy/mock-provider MOCK_MODE=fail
-kubectl -n "$NAMESPACE" rollout status deploy/mock-provider --timeout=3m
+kubectl -n "$NAMESPACE" exec deploy/mock-provider -- curl -fsS -X POST http://127.0.0.1:8080/mode/fail
+provider_status=$(kubectl -n "$NAMESPACE" exec "deploy/$FULLNAME-worker" -- \
+  curl -sS -o /dev/null -w '%{http_code}' -X POST http://mock-provider:8080/v1/chat/completions)
+[[ "$provider_status" == 503 ]] || fail "mock provider answered $provider_status after switching to fail mode"
 post_events 8
 wait_for "ClaudeMemGenerationFailureRatio firing" 420 alert_firing ClaudeMemGenerationFailureRatio
 
