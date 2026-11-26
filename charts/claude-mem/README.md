@@ -12,11 +12,32 @@ Postgres and Redis/Valkey are external. A dev-only Valkey can be bundled.
 
 Versioned image releases publish the chart to
 `oci://ghcr.io/ryanmcafee/charts/claude-mem` with the same version as the image tag.
-The packaged chart's `appVersion` selects that image tag by default. Inspect a release
-from a clean machine with `helm show chart oci://ghcr.io/ryanmcafee/charts/claude-mem
---version <version>`. Install it with `helm install claude-mem
-oci://ghcr.io/ryanmcafee/charts/claude-mem --version <version>` plus the dependency
-and credential values below. The image and chart are published in one workflow run;
+The packaged chart's `appVersion` selects that image tag by default. The release
+workflow summary records the chart's immutable OCI digest. Before installing, use
+that digest and the release workflow's exact signing identity to verify and download
+the chart. This requires `cosign` 3, `oras` 1.3, `jq`, `sha256sum`, and Helm 3:
+
+```sh
+NS=claude-mem
+VERSION=13.28.0 # replace with the release version
+DIGEST=sha256:REPLACE_WITH_64_HEX_FROM_RELEASE_WORKFLOW_SUMMARY
+IDENTITY="https://github.com/ryanmcafee/claude-mem/.github/workflows/container-publish.yml@refs/tags/v${VERSION}"
+charts/claude-mem/ci/pull-verified-release.sh "$VERSION" "$DIGEST" "$IDENTITY" "claude-mem-$VERSION.tgz"
+helm install claude-mem "./claude-mem-$VERSION.tgz" -n "$NS" --wait --timeout 10m \
+  --set database.existingSecret=pg-app \
+  --set redis.url=redis://valkey:6379 \
+  --set auth.apiKeys.existingSecret=claude-mem-api-keys
+```
+
+Use `@refs/tags/${VERSION}` instead of `@refs/tags/v${VERSION}` if the release tag
+has no `v` prefix. The helper verifies the signature against that exact workflow
+identity and GitHub Actions OIDC issuer, fetches the signed manifest by digest,
+checks the chart layer digest and matching chart `version`/`appVersion`, then saves
+the package. It exits without replacing the output package if verification fails.
+An unsigned or swapped digest must make `cosign verify` fail; do not install a
+version-tagged chart directly when following this verified path.
+
+The image and chart are published in one workflow run;
 if that run fails, check both registry artifacts before retrying because the registry
 does not offer an atomic two-artifact publish.
 

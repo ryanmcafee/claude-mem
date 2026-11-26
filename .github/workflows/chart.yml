@@ -32,6 +32,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Verified release download gate
+        run: bash charts/claude-mem/ci/test-pull-verified-release.sh
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: ${{ env.HELM_VERSION }}
