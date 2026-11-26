@@ -75,6 +75,62 @@ describe('bun-runner.js findBun: DEP0190 regression guard (#1503)', () => {
 
 const windowsDescribe = process.platform === 'win32' ? describe : describe.skip;
 
+const TRANSIENT_LOCK_CODES = new Set(['EBUSY', 'EPERM']);
+
+// Windows can hold a just-exited bun.exe open briefly, so its fixture directory needs a retry.
+function removeFixtureDir(
+  path: string,
+  remove: (path: string) => void = target => rmSync(target, { recursive: true, force: true }),
+  attempts = 20,
+  delayMs = 100
+) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove(path);
+      return;
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (attempt >= attempts || typeof code !== 'string' || !TRANSIENT_LOCK_CODES.has(code)) {
+        throw error;
+      }
+      Bun.sleepSync(delayMs);
+    }
+  }
+}
+
+function lockError(code: string) {
+  return Object.assign(new Error(`${code}: resource busy or locked, rm 'fixture'`), { code });
+}
+
+describe('bun-runner test fixture cleanup', () => {
+  it('retries removal until a transient Windows lock clears', () => {
+    let calls = 0;
+    removeFixtureDir('fixture', () => {
+      calls++;
+      if (calls < 3) throw lockError('EBUSY');
+    }, 5, 0);
+    expect(calls).toBe(3);
+  });
+
+  it('rethrows the lock error once the retries are exhausted', () => {
+    let calls = 0;
+    expect(() => removeFixtureDir('fixture', () => {
+      calls++;
+      throw lockError('EBUSY');
+    }, 4, 0)).toThrow('EBUSY');
+    expect(calls).toBe(4);
+  });
+
+  it('does not retry an error that is not a transient lock', () => {
+    let calls = 0;
+    expect(() => removeFixtureDir('fixture', () => {
+      calls++;
+      throw lockError('ENOTDIR');
+    }, 4, 0)).toThrow('ENOTDIR');
+    expect(calls).toBe(1);
+  });
+});
+
 function findBunForWhereOutput(stdout: string) {
   return createFindBun({
     IS_WINDOWS: true,
@@ -126,7 +182,7 @@ windowsDescribe('bun-runner.js Windows executable resolution', () => {
 
       return run(fixtureDir);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      removeFixtureDir(fixtureDir);
     }
   }
 
