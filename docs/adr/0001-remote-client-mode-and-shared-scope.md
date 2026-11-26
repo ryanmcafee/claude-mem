@@ -242,9 +242,8 @@ provenance of any kind, pseudonymized or otherwise.
   provenance, which is the thing this projection exists to withhold. Adding the field back later is
   additive and free if a real consumer names the need; removing it after enablement would need a
   version and a migration path (lenses: **reversibility**, **trust boundaries**, **boring is a
-  feature**). The removal is tracked as MCAA-346 and lands before the enablement gate; until it
-  does, the shipped code still emits the field and this section is the normative target, not a
-  description of `main`.
+  feature**). MCAA-346 removed it before the enablement gate, so this section now describes the
+  code on `main`.
 - `/v1/context` packs its context string from the projected rows, so the prose blob cannot carry a
   field the `observations` array dropped.
 
@@ -388,7 +387,7 @@ migration path. The conditions below exist because deciding now is free and deci
 1. ~~**Re-confirm or drop `sharedOrigin` before shared scope is enabled anywhere.**~~ **Resolved
    2026-09-28: dropped.** No consumer reads the field, so there was nothing to re-confirm it
    against, and it was the last correlation channel on a projected row. Rationale is in the
-   shared-row shape section above; the removal is MCAA-346, gated to land before enablement. The
+   shared-row shape section above; MCAA-346 removed it from the code before enablement. The
    normative shared view is now six fields: `id`, `kind`, `content`, `shared`, `createdAtEpoch`,
    `updatedAtEpoch`.
 2. **Admitting any key to `SHARED_METADATA_ALLOWLIST` is a trust-boundary change.** It requires an
@@ -468,8 +467,8 @@ migration path. The conditions below exist because deciding now is free and deci
   `pool.on('connect')` listener left behind.
 - `tests/server/routes/observation-projection.test.ts` -- the projection's own rules. It must assert
   the surviving key set as an **exact set**, not as a list of absences, so a field added to the
-  shared view later cannot pass silently. (PR #8 asserts the set that still includes `sharedOrigin`,
-  plus that token's stability; MCAA-346 reduces both to the six-field set.)
+  shared view later cannot pass silently. It asserts the six-field set for both a foreign-team row
+  and a same-team row from another project.
 - `tests/server/generation/process-generated-response.test.ts` -- the derived-observation guarantee
   above, pinned by two tests **named here on purpose**:
   `keeps a per-event generated observation private despite shared-looking input` and

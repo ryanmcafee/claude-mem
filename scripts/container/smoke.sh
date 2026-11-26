@@ -35,8 +35,8 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     if test -e hooks/credentials.json; then
       echo "Unexpected credential sentinel in runtime plugin hooks" >&2; exit 1
     fi
-    if ! grep -Fq "claude-mem:shared-origin:v1" scripts/server-service.cjs; then
-      echo "Server bundle is stale: missing source-only shared-origin marker; rebuild from src/" >&2
+    if ! grep -Fq "memories:write:shared" scripts/server-service.cjs; then
+      echo "Server bundle is stale: missing source-only memories:write:shared marker; rebuild from src/" >&2
       exit 1
     fi
     ./node_modules/.bin/tree-sitter --version
