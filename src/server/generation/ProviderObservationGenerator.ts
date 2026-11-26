@@ -24,6 +24,7 @@ import {
   type ProcessGeneratedResponseOutcome,
 } from './processGeneratedResponse.js';
 import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
+import { recordProviderTokens } from '../observability/server-metrics.js';
 
 // Phase 11 — sentinel exception class so the worker can distinguish
 // scope-violation/revoked-key failures from generic processor errors and
@@ -302,6 +303,7 @@ export class ProviderObservationGenerator {
         projectName: project?.name ?? null,
       },
     });
+    recordProviderTokens(result);
 
     const persistInput = {
       pool: this.options.pool,
@@ -323,15 +325,16 @@ export class ProviderObservationGenerator {
       : await processGeneratedResponse(persistInput);
 
     if (outcome.kind === 'parse_error') {
-      await markGenerationFailed({
-        pool: this.options.pool,
-        job: fresh,
-        reason: outcome.reason,
-        classification: 'parse_error',
-        retryable: false,
-        ...(this.options.workerId !== undefined ? { workerId: this.options.workerId } : {}),
+      // process()'s catch is the single owner of failure marking. Marking here
+      // too made it transition an already-failed job, and that second
+      // transition threw "cannot transition ... from terminal status failed"
+      // over the top of the parse error, so callers and audit rows lost the
+      // real reason. Classify it instead: kind 'parse_error' is non-retryable,
+      // which is what the inline call recorded.
+      throw new ServerClassifiedProviderError(`generation parse error: ${outcome.reason}`, {
+        kind: 'parse_error',
+        cause: undefined,
       });
-      throw new Error(`generation parse error: ${outcome.reason}`);
     }
 
     logger.info('SYSTEM', 'generation completed', {
