@@ -86,6 +86,12 @@ app.kubernetes.io/component: {{ .component }}
 {{- if and .Values.worker.keda.enabled (not .Values.worker.keda.address) (not .Values.valkey.enabled) -}}
 {{- fail "worker.keda.address (host:port of Redis/Valkey) is required when worker.keda.enabled=true" -}}
 {{- end -}}
+{{- if and .Values.tracing.otlp.enabled (not .Values.tracing.otlp.endpoint) -}}
+{{- fail "tracing.otlp.endpoint is required when tracing.otlp.enabled=true, e.g. http://otel-collector.observability:4318" -}}
+{{- end -}}
+{{- if and (not .Values.metrics.enabled) (or .Values.metrics.serviceMonitor.enabled .Values.metrics.prometheusRule.enabled .Values.metrics.dashboard.enabled) -}}
+{{- fail "metrics.serviceMonitor, metrics.prometheusRule and metrics.dashboard need metrics.enabled=true" -}}
+{{- end -}}
 {{- if and .Values.ingress.enabled .Values.httpRoute.enabled -}}
 {{- fail "enable at most one of ingress and httpRoute" -}}
 {{- end -}}
@@ -239,5 +245,50 @@ app.kubernetes.io/component: {{ .component }}
   labelSelector:
     matchLabels:
       {{- include "claude-mem.selectorLabels" (dict "root" .root "component" .component) | nindent 6 }}
+{{- end }}
+{{- end -}}
+
+{{/* Metrics listener and OTLP export env for the server and worker. */}}
+{{- define "claude-mem.observabilityEnv" -}}
+{{- if .Values.metrics.enabled }}
+- name: CLAUDE_MEM_METRICS_PORT
+  value: {{ .Values.metrics.port | quote }}
+- name: CLAUDE_MEM_METRICS_HOST
+  value: 0.0.0.0
+{{- end }}
+{{- if .Values.tracing.otlp.enabled }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ .Values.tracing.otlp.endpoint | quote }}
+{{- with .Values.tracing.otlp.headersSecret }}
+{{- if .name }}
+{{ include "claude-mem.secretEnv" (dict "name" "OTEL_EXPORTER_OTLP_HEADERS" "secret" .name "key" .key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "claude-mem.metricsPort" -}}
+{{- if .Values.metrics.enabled }}
+- name: metrics
+  containerPort: {{ .Values.metrics.port }}
+  protocol: TCP
+{{- end }}
+{{- end -}}
+
+{{/* Ingress rule letting the configured scraper reach the metrics port. */}}
+{{- define "claude-mem.metricsIngressRule" -}}
+{{- if .Values.metrics.enabled }}
+- ports:
+    - port: metrics
+      protocol: TCP
+  from:
+    - namespaceSelector:
+        matchLabels:
+          {{- toYaml .Values.metrics.allowedNamespaceLabels | nindent 10 }}
+      {{- with .Values.metrics.allowedPodLabels }}
+      podSelector:
+        matchLabels:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
 {{- end }}
 {{- end -}}

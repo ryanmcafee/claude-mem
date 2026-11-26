@@ -1,0 +1,77 @@
+# OpenAI-compatible stand-in so the Kind job exercises real generation, token usage and failures.
+# Mode "ok" answers one observation; "fail" answers 503. POST /mode/<mode> switches it in place, so
+# the worker's keep-alive connections cannot keep reaching a replaced pod still in the old mode.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-provider
+data:
+  server.js: |
+    let mode = process.env.MOCK_MODE ?? 'ok';
+    Bun.serve({
+      port: 8080,
+      fetch(req) {
+        const { pathname } = new URL(req.url);
+        if (pathname === '/healthz') return new Response('ok');
+        if (req.method === 'POST' && pathname.startsWith('/mode/')) {
+          mode = pathname.slice('/mode/'.length);
+          return new Response(mode);
+        }
+        if (mode === 'fail') {
+          return Response.json({ error: { code: 503, message: 'mock provider outage' } }, { status: 503 });
+        }
+        return Response.json({
+          model: 'mock-observer',
+          choices: [{ message: { content: '<observation><type>discovery</type><title>CI event</title><facts><fact>mock provider answered</fact></facts></observation>' } }],
+          usage: { total_tokens: 42 },
+        });
+      },
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-provider
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-provider
+  template:
+    metadata:
+      labels:
+        app: mock-provider
+    spec:
+      containers:
+        - name: mock
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - name: CLAUDE_MEM_CONTAINER_MODE
+              value: shell
+            - name: MOCK_MODE
+              value: ok
+          args: [bun, /mock/server.js]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          volumeMounts:
+            - name: mock
+              mountPath: /mock
+      volumes:
+        - name: mock
+          configMap:
+            name: mock-provider
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-provider
+spec:
+  selector:
+    app: mock-provider
+  ports:
+    - port: 8080

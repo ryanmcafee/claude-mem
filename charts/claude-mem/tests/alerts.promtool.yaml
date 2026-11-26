@@ -1,0 +1,141 @@
+# promtool unit tests for templates/prometheusrule.yaml rendered as release "mem" in namespace "memory"
+# with default thresholds. chart-render.test.ts writes the rendered groups to rules.yaml beside this file.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+
+tests:
+  - name: server down fires on zero healthy targets and on missing targets
+    interval: 1m
+    input_series:
+      - series: up{namespace="memory", job="mem-claude-mem", pod="a"}
+        values: 0x10
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ClaudeMemServerDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ClaudeMemServerDown
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: &server-down-annotations
+              summary: "No claude-mem server in memory is answering scrapes; agents cannot read or write memory."
+              description: "Every server target for mem-claude-mem is down or missing for 5m. Check `kubectl -n memory get pods -l app.kubernetes.io/instance=mem,app.kubernetes.io/component=server`, then the pod events and logs. CrashLoopBackOff usually means the database or Redis Secret is wrong or unreachable; Pending means no node fits the requests. If a release just rolled out, `helm rollback mem`."
+              runbook_url: https://github.com/ryanmcafee/claude-mem/blob/main/charts/claude-mem/RUNBOOK.md#claudememserverdown
+
+  - name: server down fires when the server was never scraped
+    interval: 1m
+    input_series:
+      - series: up{namespace="memory", job="mem-claude-mem-worker-metrics", pod="w"}
+        values: 1x10
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ClaudeMemServerDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: memory, job: mem-claude-mem }
+            exp_annotations: *server-down-annotations
+
+  - name: one healthy server replica keeps server down quiet
+    interval: 1m
+    input_series:
+      - series: up{namespace="memory", job="mem-claude-mem", pod="a"}
+        values: 0x10
+      - series: up{namespace="memory", job="mem-claude-mem", pod="b"}
+        values: 1x10
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ClaudeMemServerDown
+        exp_alerts: []
+
+  - name: a flat backlog above threshold fires once per lane, deduplicated across server replicas
+    interval: 1m
+    input_series:
+      - series: claude_mem_queue_jobs{namespace="memory", job="mem-claude-mem", pod="a", lane="event", state="waiting"}
+        values: 150x30
+      - series: claude_mem_queue_jobs{namespace="memory", job="mem-claude-mem", pod="b", lane="event", state="waiting"}
+        values: 150x30
+      - series: claude_mem_queue_jobs{namespace="memory", job="mem-claude-mem", pod="a", lane="summary", state="waiting"}
+        values: 3x30
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ClaudeMemQueueBacklogGrowing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ClaudeMemQueueBacklogGrowing
+        exp_alerts:
+          - exp_labels: { severity: warning, lane: event }
+            exp_annotations:
+              summary: "The event generation lane has 150 waiting jobs and is not draining."
+              description: "New memories are stored but observations for them are delayed. Check the worker first: `kubectl -n memory get pods -l app.kubernetes.io/instance=mem,app.kubernetes.io/component=worker`. No running worker means scale it back up or fix its crash. Running workers with a high generation failure ratio means the provider is failing (see ClaudeMemGenerationFailureRatio). Running and succeeding means throughput is short: raise worker.replicaCount or enable worker.keda."
+              runbook_url: https://github.com/ryanmcafee/claude-mem/blob/main/charts/claude-mem/RUNBOOK.md#claudememqueuebackloggrowing
+
+  - name: a large backlog that is draining stays quiet
+    interval: 1m
+    input_series:
+      - series: claude_mem_queue_jobs{namespace="memory", job="mem-claude-mem", pod="a", lane="event", state="waiting"}
+        values: 900-10x30
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ClaudeMemQueueBacklogGrowing
+        exp_alerts: []
+
+  - name: half of generation attempts failing fires
+    interval: 1m
+    input_series:
+      - series: claude_mem_generation_attempts_total{namespace="memory", job="mem-claude-mem-worker-metrics", lane="event", outcome="completed", reason=""}
+        values: 0+1x60
+      - series: claude_mem_generation_attempts_total{namespace="memory", job="mem-claude-mem-worker-metrics", lane="event", outcome="failed", reason="auth_invalid"}
+        values: 0+1x60
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ClaudeMemGenerationFailureRatio
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ClaudeMemGenerationFailureRatio
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "50% of generation attempts are failing."
+              description: "Memories are stored but the worker cannot turn them into observations. Break the failures down by reason with `sum by (reason) (rate(claude_mem_generation_attempts_total{outcome=\"failed\"}[15m]))`. auth_invalid or quota_exhausted: rotate or top up the key in generation.existingSecret, then restart the worker. rate_limit or transient: the provider is throttling or degraded; lower worker replicas or wait it out. parse_error: the model is answering in the wrong shape; check generation.model and generation.maxOutputTokens."
+              runbook_url: https://github.com/ryanmcafee/claude-mem/blob/main/charts/claude-mem/RUNBOOK.md#claudememgenerationfailureratio
+
+  - name: a single failure on an idle worker stays quiet
+    interval: 1m
+    input_series:
+      - series: claude_mem_generation_attempts_total{namespace="memory", job="mem-claude-mem-worker-metrics", lane="event", outcome="failed", reason="transient"}
+        values: 0 0 0 1x60
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ClaudeMemGenerationFailureRatio
+        exp_alerts: []
+
+  - name: API 5xx above threshold fires
+    interval: 1m
+    input_series:
+      - series: claude_mem_http_requests_total{namespace="memory", job="mem-claude-mem", method="POST", route="/v1/events", status_code="201"}
+        values: 0+10x60
+      - series: claude_mem_http_requests_total{namespace="memory", job="mem-claude-mem", method="POST", route="/v1/events", status_code="500"}
+        values: 0+5x60
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClaudeMemHttpErrorRatio
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClaudeMemHttpErrorRatio
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "33.33% of claude-mem API requests are failing with 5xx."
+              description: "Agents are getting server errors on memory reads or writes. Find the failing routes with `sum by (route, status_code) (rate(claude_mem_http_requests_total{status_code=~\"5..\"}[5m]))`, then read the server logs for those requests. Errors on every route usually mean Postgres is unreachable: check the database Secret and the CloudNativePG cluster status. If a release just rolled out, `helm rollback mem`."
+              runbook_url: https://github.com/ryanmcafee/claude-mem/blob/main/charts/claude-mem/RUNBOOK.md#claudememhttperrorratio
+
+  - name: failing probes alone do not count as API errors
+    interval: 1m
+    input_series:
+      - series: claude_mem_http_requests_total{namespace="memory", job="mem-claude-mem", method="GET", route="/healthz", status_code="503"}
+        values: 0+20x60
+      - series: claude_mem_http_requests_total{namespace="memory", job="mem-claude-mem", method="POST", route="/v1/events", status_code="201"}
+        values: 0+10x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ClaudeMemHttpErrorRatio
+        exp_alerts: []

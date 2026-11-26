@@ -64,6 +64,7 @@ spec:
             - name: CLAUDE_MEM_GENERATION_DISABLED
               value: "true"
             {{- include "claude-mem.coreEnv" . | nindent 12 }}
+            {{- include "claude-mem.observabilityEnv" . | nindent 12 }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -71,6 +72,7 @@ spec:
             - name: http
               containerPort: {{ .Values.server.port }}
               protocol: TCP
+            {{- include "claude-mem.metricsPort" . | nindent 12 }}
           startupProbe:
             {{- toYaml .Values.server.startupProbe | nindent 12 }}
           livenessProbe:

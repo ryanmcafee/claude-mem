@@ -1,0 +1,33 @@
+# Layered over ../cnpg-uri-values.yaml by ../observability.sh (not a ct values file). Short windows so each alert fires within minutes.
+generation:
+  existingSecret: ci-mock-generation
+  provider: openai
+  model: mock-observer
+  claudeCodeOAuthToken:
+    enabled: false
+  openaiApiKey:
+    enabled: true
+  openaiBaseUrl: http://mock-provider:8080/v1
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 10s
+    scrapeTimeout: 5s
+  prometheusRule:
+    enabled: true
+    serverDown:
+      for: 30s
+    queueBacklog:
+      threshold: 5
+      for: 30s
+    generationFailures:
+      minAttempts: 3
+      window: 2m
+      for: 30s
+    httpErrors:
+      minRequests: 5
+      window: 2m
+      for: 30s
+  dashboard:
+    enabled: true
+    namespace: monitoring

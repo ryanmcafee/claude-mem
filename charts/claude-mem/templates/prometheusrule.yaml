@@ -1,0 +1,92 @@
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+{{- $rule := .Values.metrics.prometheusRule }}
+{{- $server := printf "namespace=%q, job=%q" .Release.Namespace (include "claude-mem.fullname" .) }}
+{{- $worker := printf "namespace=%q, job=%q" .Release.Namespace (printf "%s-worker-metrics" (include "claude-mem.fullname" .)) }}
+{{- $api := printf "%s, route!=%q" $server "/healthz" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "claude-mem.fullname" . }}
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: claude-mem
+      rules:
+        - alert: ClaudeMemServerDown
+          expr: |
+            sum(up{ {{- $server -}} }) == 0
+            or absent(up{ {{- $server -}} })
+          for: {{ $rule.serverDown.for }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "No claude-mem server in {{ .Release.Namespace }} is answering scrapes; agents cannot read or write memory."
+            description: >-
+              Every server target for {{ include "claude-mem.fullname" . }} is down or missing for {{ $rule.serverDown.for }}.
+              Check `kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=server`,
+              then the pod events and logs. CrashLoopBackOff usually means the database or Redis Secret is wrong or unreachable;
+              Pending means no node fits the requests. If a release just rolled out, `helm rollback {{ .Release.Name }}`.
+            runbook_url: {{ printf "%s#claudememserverdown" $rule.runbookUrl }}
+        - alert: ClaudeMemQueueBacklogGrowing
+          expr: |
+            (max by (lane) (claude_mem_queue_jobs{ {{- $server -}}, state="waiting"}) > {{ $rule.queueBacklog.threshold }})
+            and on (lane)
+            (max by (lane) (deriv(claude_mem_queue_jobs{ {{- $server -}}, state="waiting"}[10m])) >= 0)
+          for: {{ $rule.queueBacklog.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`The {{ $labels.lane }} generation lane has {{ $value | humanize }} waiting jobs and is not draining.`}}"
+            description: >-
+              New memories are stored but observations for them are delayed. Check the worker first:
+              `kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=worker`.
+              No running worker means scale it back up or fix its crash. Running workers with a high generation failure
+              ratio means the provider is failing (see ClaudeMemGenerationFailureRatio). Running and succeeding means
+              throughput is short: raise worker.replicaCount or enable worker.keda.
+            runbook_url: {{ printf "%s#claudememqueuebackloggrowing" $rule.runbookUrl }}
+        - alert: ClaudeMemGenerationFailureRatio
+          expr: |
+            (
+              sum(rate(claude_mem_generation_attempts_total{ {{- $worker -}}, outcome="failed"}[{{ $rule.generationFailures.window }}]))
+              /
+              sum(rate(claude_mem_generation_attempts_total{ {{- $worker -}} }[{{ $rule.generationFailures.window }}]))
+            ) > {{ $rule.generationFailures.threshold }}
+            and
+            sum(increase(claude_mem_generation_attempts_total{ {{- $worker -}} }[{{ $rule.generationFailures.window }}])) >= {{ $rule.generationFailures.minAttempts }}
+          for: {{ $rule.generationFailures.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $value | humanizePercentage }} of generation attempts are failing.`}}"
+            description: >-
+              Memories are stored but the worker cannot turn them into observations. Break the failures down by reason with
+              `sum by (reason) (rate(claude_mem_generation_attempts_total{outcome="failed"}[15m]))`.
+              auth_invalid or quota_exhausted: rotate or top up the key in generation.existingSecret, then restart the worker.
+              rate_limit or transient: the provider is throttling or degraded; lower worker replicas or wait it out.
+              parse_error: the model is answering in the wrong shape; check generation.model and generation.maxOutputTokens.
+            runbook_url: {{ printf "%s#claudememgenerationfailureratio" $rule.runbookUrl }}
+        - alert: ClaudeMemHttpErrorRatio
+          expr: |
+            (
+              sum(rate(claude_mem_http_requests_total{ {{- $api -}}, status_code=~"5.."}[{{ $rule.httpErrors.window }}]))
+              /
+              sum(rate(claude_mem_http_requests_total{ {{- $api -}} }[{{ $rule.httpErrors.window }}]))
+            ) > {{ $rule.httpErrors.threshold }}
+            and
+            sum(increase(claude_mem_http_requests_total{ {{- $api -}} }[{{ $rule.httpErrors.window }}])) >= {{ $rule.httpErrors.minRequests }}
+          for: {{ $rule.httpErrors.for }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{`{{ $value | humanizePercentage }} of claude-mem API requests are failing with 5xx.`}}"
+            description: >-
+              Agents are getting server errors on memory reads or writes. Find the failing routes with
+              `sum by (route, status_code) (rate(claude_mem_http_requests_total{status_code=~"5.."}[5m]))`,
+              then read the server logs for those requests. Errors on every route usually mean Postgres is unreachable:
+              check the database Secret and the CloudNativePG cluster status. If a release just rolled out, `helm rollback {{ .Release.Name }}`.
+            runbook_url: {{ printf "%s#claudememhttperrorratio" $rule.runbookUrl }}
+{{- end }}

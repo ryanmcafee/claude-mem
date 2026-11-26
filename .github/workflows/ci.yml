@@ -49,7 +49,7 @@ jobs:
       # suite (imports cloudflare:test — unresolvable under bun test); it runs
       # in the dedicated sync-hub job below.
       - name: Test
-        run: bun test tests
+        run: bun test ./tests
 
       # openclaw's suite lives outside tests/ (openclaw/src/index.test.ts), so
       # the scoped step above no longer reaches it — run it explicitly.

@@ -1,0 +1,19 @@
+{{- if and .Values.metrics.enabled .Values.metrics.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "claude-mem.fullname" . }}-dashboard
+  namespace: {{ default .Release.Namespace .Values.metrics.dashboard.namespace }}
+  labels:
+    {{- include "claude-mem.labels" . | nindent 4 }}
+    {{- with .Values.metrics.dashboard.labels }}
+    {{- include "claude-mem.stringMap" . | trim | nindent 4 }}
+    {{- end }}
+  {{- with .Values.metrics.dashboard.annotations }}
+  annotations:
+    {{- include "claude-mem.stringMap" . | trim | nindent 4 }}
+  {{- end }}
+data:
+  claude-mem.json: |-
+    {{- .Files.Get "dashboards/claude-mem.json" | nindent 4 }}
+{{- end }}

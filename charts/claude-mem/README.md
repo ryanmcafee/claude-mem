@@ -204,6 +204,56 @@ cover the server (when it has more than one replica) and the worker.
 
 The two are mutually exclusive.
 
+## Observability
+
+The server and worker serve Prometheus metrics on port `metrics.port` (default 9464), separate from
+the API port, so ingress and HTTPRoute never publish them. When `networkPolicy.enabled`, scraping is
+admitted from any namespace unless `metrics.allowedNamespaceLabels` / `metrics.allowedPodLabels`
+narrow it to your Prometheus.
+
+With the Prometheus Operator installed (for example kube-prometheus-stack):
+
+```yaml
+metrics:
+  allowedNamespaceLabels:
+    kubernetes.io/metadata.name: monitoring
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+  dashboard:
+    enabled: true   # ConfigMap labelled grafana_dashboard: "1" for the Grafana sidecar
+```
+
+If your Prometheus selects ServiceMonitors and rules by label, add the label under
+`metrics.serviceMonitor.labels` and `metrics.prometheusRule.labels` (kube-prometheus-stack defaults
+to `release: <its release name>`). Enable the dashboard on one release per Grafana; its variables
+pick the namespace and release.
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `claude_mem_http_requests_total` | `method`, `route`, `status_code` | API requests by matched route template; unmatched paths share `route="unmatched"` |
+| `claude_mem_http_request_duration_seconds` | `method`, `route`, `status_code` | API latency histogram |
+| `claude_mem_queue_jobs` | `lane`, `state` | BullMQ jobs per lane (`event`, `summary`) and state, sampled by each server at scrape time |
+| `claude_mem_queue_up` | `lane` | 1 when the lane counts were read from Redis |
+| `claude_mem_generation_attempts_total` | `lane`, `outcome`, `reason` | Worker generation attempts; `reason` is the failure classification |
+| `claude_mem_generation_duration_seconds` | `lane`, `outcome` | Wall time of one attempt |
+| `claude_mem_provider_tokens_total` | `provider`, `model` | Input plus output tokens the provider reported |
+| `claude_mem_build_info` | `version`, `component` | Always 1 |
+
+| Alert | Default threshold | Severity |
+|---|---|---|
+| `ClaudeMemServerDown` | no server target up for 5m | critical |
+| `ClaudeMemHttpErrorRatio` | >5% API 5xx over 10m (at least 20 requests), for 10m | critical |
+| `ClaudeMemQueueBacklogGrowing` | >100 waiting in one lane and not draining, for 15m | warning |
+| `ClaudeMemGenerationFailureRatio` | >25% failed attempts over 15m (at least 5), for 15m | warning |
+
+Every threshold is a value under `metrics.prometheusRule`. Each alert links to its section of
+[RUNBOOK.md](RUNBOOK.md); point `metrics.prometheusRule.runbookUrl` at your own copy if you fork it.
+
+Traces: `tracing.otlp.enabled=true` with `tracing.otlp.endpoint` (an OTLP/HTTP collector base URL)
+exports HTTP and generation spans as OTLP/HTTP JSON. Off by default.
+
 ## ArgoCD
 
 Point an `Application` at this chart with your values. The migration Job runs in `PreSync`, so
