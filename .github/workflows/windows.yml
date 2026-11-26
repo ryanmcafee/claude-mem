@@ -155,7 +155,10 @@ jobs:
       # here. These are the same guarantees expressed with a cmd.exe fixture,
       # so the Windows implementations (CIM enumeration, taskkill exit-code
       # classification, the root identity gate) actually execute.
+      #
+      # Step timeouts fail a hang with its log kept; the job timeout cancels and loses it.
       - name: Tree-kill end-to-end (Windows implementations)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe'
@@ -168,6 +171,7 @@ jobs:
       # skipped as "reused", and #2313 returns silently while the code still
       # looks guarded. This asserts they agree on a real Windows process table.
       - name: Process-identity format agreement
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe'
@@ -231,3 +235,14 @@ jobs:
             Where-Object { $_.Name -match '^(uv|uvx|python)(\.exe)?$' } |
             Select-Object ProcessId, ParentProcessId, Name, CreationDate |
             Format-Table -AutoSize
+
+      - name: Upload claude-mem logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chroma-lifecycle-logs-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\claude-mem-data\logs
+            ${{ runner.temp }}\claude-mem-ghost-data\logs
+          if-no-files-found: ignore
+          retention-days: 7

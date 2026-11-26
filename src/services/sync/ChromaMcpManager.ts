@@ -788,7 +788,7 @@ export class ChromaMcpManager {
         try { child.kill('SIGKILL'); } catch { /* already dead */ }
       }
 
-      const unavailableMessage = `chroma-mcp prewarm failed: ${errorMessage}`;
+      const unavailableMessage = `chroma-mcp prewarm failed: ${errorMessage}${stderr ? `: ${stderr}` : ''}`;
       recordUvxVectorSearchUnavailable(unavailableMessage);
       throw new ChromaUnavailableError(unavailableMessage, error instanceof Error ? error : undefined);
     } finally {
