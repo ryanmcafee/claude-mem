@@ -79,27 +79,91 @@ jobs:
       # 20-second waitUntil waits inside the suite are what detected the orphan
       # defect, and a retry would paper over the exact race being measured.
       #
-      # The step timeout is a harness cap, not a retime. An all-passing draw
-      # runs in ~20s, so 8 minutes cannot truncate a healthy suite. It exists
-      # because a wedged draw that trips the JOB timeout is cancelled, and
-      # cancellation kills the `if: always()` upload too -- that is how draw 2
-      # of run 36415539150 produced no evidence at all. A failed step still
-      # runs the upload, so a wedge reports itself instead of going silent.
+      # Why a watchdog rather than a cap. Draw 2 of run 36415539150 lost its
+      # evidence because its process could not be terminated, NOT because
+      # cancellation skips `if: always()` -- probe run 36490783768 cancelled a
+      # job mid-step and the upload still ran and finalized. Draw 2's suite step
+      # instead reports conclusion `null` with no completed_at, and its upload
+      # step never started at all: the runner took the full 5-minute force-kill
+      # grace and tore the job down without reaching another step.
+      #
+      # A step cap cannot fix that, because expiring a step also has to kill the
+      # process. So this step never waits on bun. It starts bun detached, polls
+      # it, and if the deadline passes it snapshots the process and exits on its
+      # own terms, leaving the child to the runner's orphan sweep. pwsh staying
+      # responsive is what lets the upload step run; the caps are only backstops
+      # for a wedge in the watchdog itself.
       #
       # The junit report, not the console output, is what the verdict reads.
       # bun's console format varies with platform and TTY -- a redirected Linux
       # run prints only a tally, with no line at all for a skipped test -- so a
       # scrape can mistake "never ran" for "passed". junit.xml names every
       # testcase and marks <skipped /> explicitly.
+      #
+      # The deadline sits above the suite's legitimate worst case: six tests
+      # capped at 60s each is a ~6-minute ceiling, and bun spends only
+      # 0.081-0.360s outside the test bodies it contains (59 green 6-test draws,
+      # runs 36462256211 and 36462258812). 7 minutes cannot truncate a healthy
+      # draw, whose whole run is 16-29s.
+      #
+      # timing.log is stamped before bun starts and appended after, so which
+      # fields and files survive name the region that wedged:
+      #
+      #   wedged=true, no junit.xml  -> inside bun before the report: module load
+      #   wedged=true, junit.xml     -> after the report: bun's exit teardown
+      #   no timing.log at all       -> never reached bun; the wedge is the step
+      #
+      # threads.log is the discriminator those cannot give: a Windows thread
+      # parked in an uninterruptible WaitReason is what makes a process survive
+      # termination, which is the behaviour draw 2 actually exhibited.
       - name: Tree-kill suite
         timeout-minutes: 8
         shell: pwsh
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
           $suite = 'tests/shared/kill-process-tree-cross-platform.test.ts'
-          & $bun test $suite --timeout 120000 --reporter=junit --reporter-outfile=junit.xml *> draw.log
-          $code = $LASTEXITCODE
-          Get-Content draw.log
+          $started = Get-Date
+          "started=$($started.ToUniversalTime().ToString('o'))" | Set-Content timing.log
+
+          # Same bun, same arguments, same junit reporter as a waited run; only
+          # the waiting differs. Start-Process cannot send both streams to one
+          # file, so they split, and bun writes its per-test result lines to
+          # STDERR -- read draw.err, not draw.log, to see how far it got.
+          $proc = Start-Process -FilePath $bun -NoNewWindow -PassThru `
+            -RedirectStandardOutput draw.log -RedirectStandardError draw.err `
+            -ArgumentList 'test', $suite, '--timeout', '120000', '--reporter=junit', '--reporter-outfile=junit.xml'
+
+          $deadline = $started.AddMinutes(7)
+          while (-not $proc.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+
+          if ($proc.HasExited) {
+            $code = $proc.ExitCode
+            'wedged=false' | Add-Content timing.log
+          } else {
+            $code = 124
+            'wedged=true' | Add-Content timing.log
+            "wedged_pid=$($proc.Id)" | Add-Content timing.log
+            # Recorded before any kill attempt: terminating the process is what
+            # destroys the wait state that explains the wedge.
+            Get-Process -Id $proc.Id -ErrorAction SilentlyContinue |
+              ForEach-Object { $_.Threads } |
+              Select-Object Id, ThreadState, WaitReason, TotalProcessorTime, StartTime |
+              Format-Table -AutoSize | Out-String -Width 400 | Set-Content threads.log
+            Get-Content threads.log
+            # Best effort, and deliberately not awaited: if the child ignores
+            # this the step must still finish so the upload runs.
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          $ended = Get-Date
+          @(
+            "ended=$($ended.ToUniversalTime().ToString('o'))"
+            "wall_seconds=$([math]::Round(($ended - $started).TotalSeconds, 3))"
+            "exit_code=$code"
+          ) | Add-Content timing.log
+          Get-Content timing.log
+          if (Test-Path draw.log) { Get-Content draw.log }
+          if (Test-Path draw.err) { Get-Content draw.err }
           exit $code
 
       # A wedged draw is the most informative outcome this soak can produce, so
@@ -129,8 +193,11 @@ jobs:
           name: tree-kill-soak-draw-${{ matrix.draw }}
           path: |
             draw.log
+            draw.err
             junit.xml
             survivors.log
+            threads.log
+            timing.log
           if-no-files-found: error
 
   verdict:
