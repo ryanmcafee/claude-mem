@@ -484,12 +484,14 @@ async function buildHooks() {
       ],
       define: {
         '__DEFAULT_PACKAGE_VERSION__': `"${version}"`,
-        ...DIRNAME_DEFINE
+        ...DIRNAME_DEFINE,
+        'import.meta.url': '__IMPORT_META_URL__'
       },
       banner: {
         js: [
           '#!/usr/bin/env bun',
-          ...DIRNAME_BANNER
+          ...DIRNAME_BANNER,
+          'var __IMPORT_META_URL__ = require("node:url").pathToFileURL(__CM_FILENAME__).href;'
         ].join('\n')
       }
     });

@@ -58,8 +58,9 @@ the following are missing or invalid in Docker:
 | `CLAUDE_MEM_AUTH_MODE`            | Always   | Must NOT be `local-dev` in Docker.                           |
 | `CLAUDE_MEM_ALLOW_LOCAL_DEV_BYPASS` | Docker | Must NOT be `1`/`true` in Docker.                            |
 | `CLAUDE_MEM_GENERATION_DISABLED`  | Optional | Set to `true` on the HTTP service when running a separate worker. |
-| `CLAUDE_MEM_SERVER_PROVIDER`      | Worker   | One of `claude`, `gemini`, `openrouter`. Worker only.        |
-| `ANTHROPIC_API_KEY` (or alt)      | Worker   | Required by the chosen provider.                             |
+| `CLAUDE_MEM_SERVER_PROVIDER`      | Worker   | One of `claude-code`, `claude`, `gemini`, `openrouter`. Worker only. |
+| `CLAUDE_CODE_OAUTH_TOKEN`         | Worker   | Required by `claude-code` (subscription, via the bundled `claude` CLI). Metered keys are withheld from the CLI. |
+| `ANTHROPIC_API_KEY` (or alt)      | Worker   | Required by the chosen API-key provider.                     |
 
 Local development can still use SQLite + `local-dev` auth bypass **outside
 Docker only**. Deployable mode must use the table above.
