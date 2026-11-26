@@ -5,7 +5,7 @@ import { logger } from '../../utils/logger.js';
 import { PostgresAuthRepository } from '../../storage/postgres/auth.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { ProviderObservationGenerator } from '../generation/ProviderObservationGenerator.js';
-import { recordGenerationAttempt } from '../observability/generation-metrics.js';
+import { initGenerationAttemptSeries, recordGenerationAttempt } from '../observability/generation-metrics.js';
 import { nowUnixNano } from '../observability/otlp-tracer.js';
 import type { ServerGenerationProvider } from '../generation/providers/shared/types.js';
 import type { ServerGenerationJobPayload } from '../jobs/types.js';
@@ -64,6 +64,7 @@ export class ActiveServerGenerationWorkerManager implements ServerGenerationWork
    */
   start(): void {
     if (this.started) return;
+    initGenerationAttemptSeries();
     const dispatcherFor = (lane: 'event' | 'summary') => async (job: Job<ServerGenerationJobPayload>) => {
       const startedAt = process.hrtime.bigint();
       const startUnixNano = nowUnixNano();

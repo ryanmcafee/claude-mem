@@ -7,6 +7,20 @@ import { generationAttemptsTotal, generationDurationSeconds } from './server-met
 
 export type GenerationLane = 'event' | 'summary';
 
+const GENERATION_LANES: readonly GenerationLane[] = ['event', 'summary'];
+const KNOWN_FAILURE_REASONS = [
+  'transient', 'unrecoverable', 'rate_limit', 'quota_exhausted', 'auth_invalid', 'parse_error',
+  'scope_mismatch', 'revoked_key', 'unknown',
+] as const;
+
+// A series first exposed at its burst value has no zero sample, so rate() would miss that burst.
+export function initGenerationAttemptSeries(): void {
+  for (const lane of GENERATION_LANES) {
+    generationAttemptsTotal.inc({ lane, outcome: 'completed', reason: '' }, 0);
+    for (const reason of KNOWN_FAILURE_REASONS) generationAttemptsTotal.inc({ lane, outcome: 'failed', reason }, 0);
+  }
+}
+
 export function generationFailureReason(error: unknown): string {
   if (error instanceof ServerGenerationScopeViolationError) return error.reason;
   if (error instanceof ServerClassifiedProviderError) return error.kind;

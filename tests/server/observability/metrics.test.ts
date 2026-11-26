@@ -3,7 +3,7 @@ import type http from 'http';
 import pg from 'pg';
 import { ServerGenerationScopeViolationError } from '../../../src/server/generation/ProviderObservationGenerator.js';
 import { ServerClassifiedProviderError } from '../../../src/server/generation/providers/shared/error-classification.js';
-import { generationFailureReason, recordGenerationAttempt } from '../../../src/server/observability/generation-metrics.js';
+import { generationFailureReason, initGenerationAttemptSeries, recordGenerationAttempt } from '../../../src/server/observability/generation-metrics.js';
 import { CollectedGauge, Counter, Histogram, MetricsRegistry } from '../../../src/server/observability/metrics-registry.js';
 import {
   METRICS_CONTENT_TYPE,
@@ -185,6 +185,17 @@ describe('generation metrics', () => {
 
     expect(generationAttemptsTotal.get(completed)).toBe(before.completed + 1);
     expect(generationAttemptsTotal.get(failed)).toBe(before.failed + 1);
+  });
+
+  it('exposes every lane and failure reason at zero so rate() counts the first failures', async () => {
+    initGenerationAttemptSeries();
+    const body = await metricsRegistry.render();
+    for (const lane of ['event', 'summary']) {
+      expect(body).toMatch(new RegExp(`^claude_mem_generation_attempts_total\\{lane="${lane}",outcome="completed",reason=""\\} \\d+$`, 'm'));
+      for (const reason of ['transient', 'parse_error', 'scope_mismatch', 'unknown']) {
+        expect(body).toMatch(new RegExp(`^claude_mem_generation_attempts_total\\{lane="${lane}",outcome="failed",reason="${reason}"\\} \\d+$`, 'm'));
+      }
+    }
   });
 
   it('adds provider tokens and ignores a response that reported none', () => {
