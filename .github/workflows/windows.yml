@@ -42,10 +42,14 @@ jobs:
       # scripts that replaced rsync and tail: mirror pattern matching, --delete
       # protection and -a metadata reconciliation against real NTFS paths, and
       # the bounded log tail under a constrained heap.
+      #
+      # The survivor census is here for the same reason: its process-table read
+      # is the CIM query on this platform, and the PID-reuse arm can only run
+      # where PIDs are actually recycled.
       - shell: pwsh
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe'
-          & $bun test tests/bun-runner.test.ts tests/scripts/mirror-dir.test.ts tests/scripts/worker-logs.test.ts
+          & $bun test tests/bun-runner.test.ts tests/scripts/mirror-dir.test.ts tests/scripts/worker-logs.test.ts tests/scripts/tree-kill-survivor-census.test.ts
 
       # The step that used to be impossible on Windows: sync-marketplace shelled
       # out to rsync. Runs the real script against a scratch USERPROFILE (Node's
@@ -156,10 +160,27 @@ jobs:
       # so the Windows implementations (CIM enumeration, taskkill exit-code
       # classification, the root identity gate) actually execute.
       - name: Tree-kill end-to-end (Windows implementations)
+        id: tree-kill
         shell: pwsh
+        env:
+          CLAUDE_MEM_TREE_KILL_PID_LEDGER: tree-kill-pids.jsonl
         run: |
           $bun = Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe'
           & $bun test tests/shared/kill-process-tree-cross-platform.test.ts --timeout 120000
+
+      # A green suite is not evidence that it left nothing running: for 20/20
+      # draws of the MCAA-380 soak every green draw orphaned two `ping -n 120`
+      # trees, and no assertion in the suite could see them. This joins the
+      # per-test PID ledger the suite writes against the process table and fails
+      # when any suite-created process is still alive, naming the test that
+      # created it. Runs even when the suite failed — a wedged draw is when the
+      # census matters most — but not when the suite never ran.
+      - name: Attribute tree-kill survivors
+        if: always() && steps.tree-kill.conclusion != 'skipped'
+        shell: pwsh
+        run: |
+          $bun = Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe'
+          & $bun scripts/tree-kill-survivor-census.ts --ledger tree-kill-pids.jsonl --out survivors.log
 
       # De-risks the one thing that cannot be checked off-Windows: the CIM
       # enumeration derives each descendant's start token from the same row that
