@@ -11,6 +11,7 @@ import { getRedisQueueConfig } from '../queue/redis-config.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ActiveServerGenerationWorkerManager } from './ActiveServerGenerationWorkerManager.js';
 import { ClaudeObservationProvider } from '../generation/providers/ClaudeObservationProvider.js';
+import { ClaudeCodeObservationProvider } from '../generation/providers/ClaudeCodeObservationProvider.js';
 import { GeminiObservationProvider } from '../generation/providers/GeminiObservationProvider.js';
 import { OpenRouterObservationProvider } from '../generation/providers/OpenRouterObservationProvider.js';
 import type { ServerGenerationProvider } from '../generation/providers/shared/types.js';
@@ -230,7 +231,7 @@ function buildGenerationWorkerManager(
   const provider = injectedProvider ?? buildServerGenerationProviderFromEnv();
   if (!provider) {
     return new DisabledServerGenerationWorkerManager(
-      'no server generation provider configured; set CLAUDE_MEM_SERVER_PROVIDER and the matching API key to enable.',
+      'no server generation provider configured; set CLAUDE_MEM_SERVER_PROVIDER and the matching credential (CLAUDE_CODE_OAUTH_TOKEN for claude-code, otherwise an API key) to enable.',
     );
   }
   return new ActiveServerGenerationWorkerManager({
@@ -240,7 +241,7 @@ function buildGenerationWorkerManager(
   });
 }
 
-function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null {
+export function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null {
   const provider = (process.env.CLAUDE_MEM_SERVER_PROVIDER ?? '').trim().toLowerCase();
   if (!provider) return null;
   try {
@@ -282,6 +283,15 @@ function instantiateServerGenerationProvider(provider: string): ServerGeneration
     const maxOutputTokens = resolveServerMaxOutputTokens();
     if (maxOutputTokens !== undefined) opts.maxOutputTokens = maxOutputTokens;
     return new ClaudeObservationProvider(opts);
+  }
+  if (provider === 'claude-code') {
+    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '';
+    if (!oauthToken) return null;
+    const opts: { oauthToken: string; model?: string; maxOutputTokens?: number } = { oauthToken };
+    if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
+    const maxOutputTokens = resolveServerMaxOutputTokens();
+    if (maxOutputTokens !== undefined) opts.maxOutputTokens = maxOutputTokens;
+    return new ClaudeCodeObservationProvider(opts);
   }
   if (provider === 'gemini') {
     const apiKey = process.env.GEMINI_API_KEY ?? process.env.CLAUDE_MEM_GEMINI_API_KEY ?? '';
