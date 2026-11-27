@@ -12,7 +12,7 @@ import {
 } from '../../../src/storage/postgres/index.js';
 import { DisabledServerQueueManager } from '../../../src/server/runtime/types.js';
 import { logger } from '../../../src/utils/logger.js';
-import { quoteIdentifier, newApiKey } from '../../sdk/pg-isolation.js';
+import { createIsolatedSchema, dropSchema, newApiKey, poolForSchema } from '../../sdk/pg-isolation.js';
 
 // Phase 12 — integration tests for GET /v1/jobs (with admin payload guard),
 // POST /v1/jobs/:id/retry, POST /v1/jobs/:id/cancel. Postgres-gated; skipped
@@ -47,15 +47,10 @@ describe('Phase 12 — GET /v1/jobs + retry/cancel routes', () => {
       spyOn(logger, 'error').mockImplementation(() => {}),
       spyOn(logger, 'debug').mockImplementation(() => {}),
     ];
-    pool = new pg.Pool({ connectionString: testDatabaseUrl });
+    schemaName = await createIsolatedSchema(testDatabaseUrl, 'cm_phase12_jobs');
+    pool = poolForSchema(testDatabaseUrl, schemaName);
     client = await pool.connect();
-    schemaName = `cm_phase12_jobs_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
     await bootstrapServerPostgresSchema(client);
-    pool.on('connect', (c) => {
-      c.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
     storage = createPostgresStorageRepositories(client);
 
     const team = await storage.teams.create({ name: 'team-a' });
@@ -130,9 +125,9 @@ describe('Phase 12 — GET /v1/jobs + retry/cancel routes', () => {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       if (code !== 'ERR_SERVER_NOT_RUNNING') throw error;
     }
-    await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
     client.release();
     await pool.end();
+    await dropSchema(testDatabaseUrl, schemaName);
     loggerSpies.forEach(spy => spy.mockRestore());
     mock.restore();
   });
